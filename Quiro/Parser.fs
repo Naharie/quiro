@@ -94,7 +94,7 @@ simpleTermRef.Value <- opt spaces >>. choice [
     listTerm
 ] .>> opt spaces
 
-let compoundTerm, compoundLookup, compoundParser =
+let compoundParser =
     let startArgs = skipChar '('
     let endArgs = skipChar ')'
     let separator = skipChar ','
@@ -103,16 +103,7 @@ let compoundTerm, compoundLookup, compoundParser =
     
     let compoundParser: _ Parser = atomParser .>>. opt argsParser
         
-    let compoundTerm =
-        compoundParser
-        |>> fun (atom, args) ->
-            CompoundTerm(atom, args |> Option.map List.toArray |> Option.defaultValue Array.empty)
-    let compoundLookup: _ Parser =
-        variableParser .>>. opt argsParser
-        |>> fun (atom, args) ->
-            CompoundLookup(atom, args |> Option.map List.toArray |> Option.defaultValue Array.empty)
-        
-    compoundTerm, compoundLookup, compoundParser
+    compoundParser
 
 type private GoalUnionKind = Conjunction | Disjunction
 

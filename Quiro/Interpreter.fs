@@ -3,27 +3,12 @@ module Quiro.Interpreter
 open System
 open Quiro.DataTypes
 
-/// Creates a human-readable display for a simple term.
-let rec show (term: SimpleTerm) =
-    match term with
-    | Atom name -> name
-    | Variable name -> name
-    | Integer value -> string value
-    | Float value -> string value
-    | ListTerm values ->
-        values
-        |> List.map show
-        |> String.concat ", "
-        |> fun body -> sprintf $"[ %s{body} ]"
-
 /// Execute a rule, that is, add it to the list of known rules, but do not perform a query.
 let execute (Rule (functor, args, _) as rule) (scope: Scope) =
     let updatedRules =
         let key = (functor, args.Length)
         let existing =
             Map.tryFind key scope.rules
-            // Drop the existing rule body if we are declaring a new rule with the same form of inputs.
-            |> Option.map (List.filter (fun (Rule (otherFunctor, otherArgs, _)) -> functor <> otherFunctor && args <> otherArgs))
             |> Option.defaultValue List.empty
         
         Map.add key (rule :: existing) scope.rules
@@ -41,7 +26,7 @@ let private getConcreteArgs args bindings =
         | other -> other
     )
 
-let private trace = false
+let private trace = true
 let private print depth (text: string) =
     if trace then
         let prefix = String.replicate depth "\t"
@@ -73,7 +58,7 @@ let private testRule tryProveGoal depth (scope: Scope) (currentGoal: string * Si
                 (false, argBindings)
         ) (true, Map.empty)
     
-    print depth $"%A{rule} -> %O{isMatch}"
+    print depth $"%s{Rule.toString rule} -> %O{isMatch}"
     
     // If the rule matches then we need to try and prove the rule's goal.
     if isMatch then
@@ -111,18 +96,38 @@ let private testRule tryProveGoal depth (scope: Scope) (currentGoal: string * Si
     else
         None
 
+let rec private substituteVars (goal: Goal) (vars: Map<string, SimpleTerm>) =
+    match goal with
+    | SimpleGoal(functor, args) ->
+        SimpleGoal(
+            functor,
+            args
+            |> Array.map(function
+                | Variable name as var ->
+                    vars
+                    |> Map.tryFind name
+                    |> Option.defaultValue var
+                | other -> other
+            )
+        )
+    | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVars a vars, substituteVars b vars)
+    | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVars a vars, substituteVars b vars)
 let rec private tryProveGoal (depth: int) (goal: Goal) (argBindings: Map<string, SimpleTerm>) (scope: Scope): Map<string, SimpleTerm> list option =
-    print depth $"%A{goal}"
+    let goal = substituteVars goal argBindings
+ 
+    if trace then
+        match goal with
+        | SimpleGoal ("true", [||]) -> ()
+        | SimpleGoal ("false", [||]) -> ()
+        | _ ->
+            print depth (Goal.toString goal)
     
     match goal with
     | SimpleGoal ("true", [||]) -> Some []
     | SimpleGoal ("false", [||]) -> None
 
-    | SimpleGoal (functor, rawArgs) ->
-        let args = getConcreteArgs rawArgs argBindings
+    | SimpleGoal (functor, args) ->
         let key = (functor, args.Length)
-        
-        print (depth + 1) $"%A{args}"
         
         match scope.rules |> Map.tryFind key with
         | Some rules ->

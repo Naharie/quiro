@@ -1,10 +1,13 @@
 ﻿open System
 open Quiro
+open Quiro.DataTypes
 
 [<EntryPoint>]
 let main args =
     let mutable scope = Scope.defaultScope
  
+    printfn "Enter a rule followed by a period to create a new rule or enter a query followed by a question mark to test that query."
+    
     while true do
         printf "?- "
         let isQuery, code =
@@ -25,7 +28,7 @@ let main args =
 
                     for bindingGroup in bindings do
                         for KeyValue(variable, value) in bindingGroup do
-                            printfn $"%s{variable} = %s{Interpreter.show value}"
+                            printfn $"%s{variable} = %s{SimpleTerm.toString value}"
 
                 | Ok None -> printfn "No\r\n"
                 | Error message -> printfn $"%s{message}"
