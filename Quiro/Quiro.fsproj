@@ -1,0 +1,25 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+    <PropertyGroup>
+        <OutputType>Exe</OutputType>
+        <TargetFramework>net8.0</TargetFramework>
+        <LangVersion>preview</LangVersion>
+    </PropertyGroup>
+
+    <ItemGroup>
+        <Compile Include="Option.fs" />
+        <Compile Include="Array.fs" />
+        <Compile Include="Map.fs" />
+        <Compile Include="DataTypes.fs" />
+        <Compile Include="Parser.fs" />
+        <Compile Include="Scope.fs" />
+        <Compile Include="Interpreter.fs" />
+        <Compile Include="Program.fs"/>
+    </ItemGroup>
+
+    <ItemGroup>
+      <PackageReference Include="ExtendedNumerics.BigDecimal" Version="2025.1004.0.247" />
+      <PackageReference Include="FParsec" Version="2.0.0-beta2" />
+    </ItemGroup>
+
+</Project>
