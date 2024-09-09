@@ -25,12 +25,14 @@ module SimpleTerm =
 
 type Goal =
     | SimpleGoal of functor:string * arguments:SimpleTerm[]
+    | NegatedGoal of Goal
     | ConjunctionGoal of Goal * Goal
     | DisjunctionGoal of Goal * Goal
 
 module Goal =
     let rec toString goal =
         match goal with
+        | SimpleGoal(goal, [||]) -> goal
         | SimpleGoal(functor, args) ->
             let argsStr = args |> Array.map SimpleTerm.toString |> String.concat ", "
             $"%s{functor}(%s{argsStr})"

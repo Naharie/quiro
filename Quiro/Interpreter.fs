@@ -1,6 +1,8 @@
 module Quiro.Interpreter
 
 open System
+open System.Data
+open Microsoft.FSharp.Quotations
 open Quiro.DataTypes
 
 /// Execute a rule, that is, add it to the list of known rules, but do not perform a query.
@@ -26,20 +28,66 @@ let private getConcreteArgs args bindings =
         | other -> other
     )
 
-let private trace = true
+type Trace = All | OnlyTrue | NoTrace
+
+let private trace = NoTrace
+
 let private print depth (text: string) =
-    if trace then
-        let prefix = String.replicate depth "\t"
-        Console.Write(prefix)
-        Console.WriteLine(text)
+    let prefix = String.replicate depth "\t"
+    Console.Write(prefix)
+    Console.WriteLine(text)
+
+type TryProveGoalArgs = {
+    depth: int
+    goal: Goal
+    argBindings: Map<string, SimpleTerm>
+    scope: Scope
+    seen: Set<Goal>
+}
+type TestRuleArgs = {
+    tryProveGoal: TryProveGoalArgs -> Map<string, SimpleTerm> list option
+    depth: int
+    scope: Scope
+    currentGoal: string * SimpleTerm[]
+    rule: Rule
+    seen: Set<Goal>
+}
+
+let rec private substituteVars (goal: Goal) (vars: Map<string, SimpleTerm>) =
+    match goal with
+    | SimpleGoal(functor, args) ->
+        SimpleGoal(
+            functor,
+            args
+            |> Array.map(function
+                | Variable name as var ->
+                    vars
+                    |> Map.tryFind name
+                    |> Option.bind (function
+                        | Variable _ -> None
+                        | other -> Some other
+                    )
+                    |> Option.defaultValue var
+                | other -> other
+            )
+        )
+    | NegatedGoal goal -> NegatedGoal (substituteVars goal vars)
+    | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVars a vars, substituteVars b vars)
+    | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVars a vars, substituteVars b vars)
 
 /// Tests a rule against a goal to see if it matches,
 /// creating a table of any required bindings when it does.
-let private testRule tryProveGoal depth (scope: Scope) (currentGoal: string * SimpleTerm[]) (rule: Rule) : Map<string, SimpleTerm> list option =
-    let _, concreteArgs = currentGoal
-    let (Rule(_, ruleArgs, ruleGoal)) = rule
+let private testRule args : Map<string, SimpleTerm> list option =
+    let {
+        tryProveGoal = tryProveGoal
+        depth = depth
+        scope = scope
+        currentGoal = _, outerArgs
+        rule = Rule(ruleFunctor, ruleArgs, ruleGoal) as rule
+        seen = seen
+    } = args
     
-    let argPairs = Array.zip ruleArgs concreteArgs
+    let argPairs = Array.zip ruleArgs outerArgs
     
     /// Build a mapping of variable names used in the goal to the supplied concrete values,
     /// all the while checking that any non-variable arguments the rule demands are satisfied.
@@ -58,143 +106,156 @@ let private testRule tryProveGoal depth (scope: Scope) (currentGoal: string * Si
                 (false, argBindings)
         ) (true, Map.empty)
     
-    print depth $"%s{Rule.toString rule} -> %O{isMatch}"
-    
+    match trace with
+    | All | OnlyTrue ->
+        let ruleArgs =
+            ruleArgs
+            |> Array.map(function
+                | Variable name as var ->
+                    argBindings
+                    |> Map.tryFind name
+                    |> Option.defaultValue var
+                | other -> other
+            )
+        let rule = Rule(ruleFunctor, ruleArgs, substituteVars ruleGoal argBindings)
+        
+        match trace with
+        | All ->
+            print depth $"%s{Rule.toString rule} -> %O{isMatch}"
+        | OnlyTrue -> if isMatch then print depth $"%s{Rule.toString rule}"
+        | NoTrace -> ()
+    | OnlyTrue | NoTrace -> ()
+
     // If the rule matches then we need to try and prove the rule's goal.
     if isMatch then
-        match tryProveGoal depth ruleGoal argBindings scope with
-        // 'ruleGoalBindings' contains any variables bound during the proof of the goal.
-        | Some ruleGoalBindingsList ->
-            // If the current goal we are evaluating has a variable in a given slot *and* that slot is a variable in the rule pattern,
-            // we want to be able to capture that inner variable's values to use as values for the outer variable.
-            // We insert an extra empty map here to ensure we go through the process of creating a binding set at least once
-            // (The inner goal may not have created any binding sets.)
-            (Map.empty :: ruleGoalBindingsList)
-            // All variables bindings happen in sets so that a query such as sum(X, Y, 10) returns pairs of X and Y that add to 10 instead of disconnected lists of values.
-            |> List.map (fun bindingSet ->
+        match tryProveGoal { depth = depth; goal = ruleGoal; scope = scope; argBindings = argBindings; seen = seen } with
+        | Some newBindings ->
+            (Map.empty :: newBindings)
+            |> List.map (fun bindingGroup ->
+                // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to to the outer scope.
                 argPairs
-                |> Array.choose (fun (ruleArg, concreteArg) ->
-                    match ruleArg, concreteArg with
-                    | Variable concreteVar, Variable ruleVar ->
-                        bindingSet
-                        |> Map.tryFind ruleVar
-                        |> Option.map (fun value ->
-                            (concreteVar, value)
-                        )
-
-                    | _, Variable concreteVar ->
-                        Some (concreteVar, ruleArg)
-                        
+                |> Array.choose (fun (ruleArg, outerArg) ->
+                    match outerArg, ruleArg with
+                    | Variable name, Variable innerName ->
+                        bindingGroup |> Map.tryFind innerName
+                        |> Option.map (fun value -> name, value)
+                    | Variable name, _ -> Some (name, ruleArg)
                     | _ -> None
                 )
                 |> Map.ofArray
             )
             |> List.filter (Map.isEmpty >> not)
             |> Some
-
         | None -> None
     else
         None
 
-let rec private substituteVars (goal: Goal) (vars: Map<string, SimpleTerm>) =
-    match goal with
-    | SimpleGoal(functor, args) ->
-        SimpleGoal(
-            functor,
-            args
-            |> Array.map(function
-                | Variable name as var ->
-                    vars
-                    |> Map.tryFind name
-                    |> Option.defaultValue var
-                | other -> other
-            )
-        )
-    | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVars a vars, substituteVars b vars)
-    | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVars a vars, substituteVars b vars)
-let rec private tryProveGoal (depth: int) (goal: Goal) (argBindings: Map<string, SimpleTerm>) (scope: Scope): Map<string, SimpleTerm> list option =
-    let goal = substituteVars goal argBindings
- 
-    if trace then
-        match goal with
-        | SimpleGoal ("true", [||]) -> ()
-        | SimpleGoal ("false", [||]) -> ()
-        | _ ->
-            print depth (Goal.toString goal)
+let rec private tryProveGoal args: Map<string, SimpleTerm> list option =
+    let {
+        depth = depth
+        goal = goal
+        argBindings = argBindings
+        scope = scope
+        seen = seen
+    } = args
     
-    match goal with
-    | SimpleGoal ("true", [||]) -> Some []
-    | SimpleGoal ("false", [||]) -> None
+    let goal = substituteVars goal argBindings
+    
+    if seen |> Set.contains goal then
+        None
+    else
+        match goal with
+        | SimpleGoal ("true", [||]) -> Some []
+        | SimpleGoal ("false", [||]) -> None
 
-    | SimpleGoal (functor, args) ->
-        let key = (functor, args.Length)
-        
-        match scope.rules |> Map.tryFind key with
-        | Some rules ->
-            // Shadow test rule with a version that partially applies with all the shared args.
-            let testRule = testRule tryProveGoal (depth + 1) scope (functor, args)
+        | SimpleGoal (functor, args) ->
+            let key = (functor, args.Length)
             
-            let success, bindings =
-                rules
-                |> List.fold (fun (success, bindings) rule ->
-                    match testRule rule with
-                    | Some newBindings ->
-                        (true, List.append bindings newBindings)
-                    | None ->
-                        (success, bindings)
-                ) (false, [])
+            match scope.rules |> Map.tryFind key with
+            | Some rules ->
+                let success, bindings =
+                    rules
+                    |> List.fold (fun (success, bindings) rule ->
+                        match testRule {
+                            tryProveGoal = tryProveGoal
+                            depth = depth + 1
+                            scope = scope
+                            currentGoal = (functor, args)
+                            rule = rule
+                            seen = seen |> Set.add goal
+                        } with
+                        | Some newBindings ->
+                            (true, List.append bindings newBindings)
+                        | None ->
+                            (success, bindings)
+                    ) (false, [])
+                
+                if success then
+                    Some bindings
+                else
+                    None
             
-            if success then
-                Some bindings
-            else
-                None
+            | None ->
+                match scope.nativeRules |> Map.tryFind key with
+                | Some rule -> rule args
+                | None -> None
+
+        | NegatedGoal goal ->
+            Option.invert [] (tryProveGoal { depth = depth + 1; goal = goal; argBindings = argBindings; scope = scope; seen = seen |> Set.add goal })
         
-        | None ->
-            match scope.nativeRules |> Map.tryFind key with
-            | Some rule -> rule args
+        | ConjunctionGoal (a, b) ->
+            match tryProveGoal { depth = depth + 1; goal = a; argBindings = argBindings; scope = scope; seen = seen |> Set.add goal } with
+            | Some newBindings ->
+                let bindings =
+                    newBindings
+                    |> List.map (fun bindingGroup -> Map.merge bindingGroup argBindings)
+                
+                // If we have at least one result then goal b was proved at least once with some set of bindings.
+                let result =
+                    (Map.empty :: bindings)
+                    |> List.choose (fun bindingGroup ->
+                        tryProveGoal { depth = depth + 1; goal = b; argBindings = bindingGroup; scope = scope; seen = seen |> Set.add goal }
+                    )
+
+                match result with
+                | [] -> None
+                | _ -> Some(
+                    result
+                    |> List.collect id
+                    |> List.filter (Map.isEmpty >> not)
+                )
+                
             | None -> None
 
-    | ConjunctionGoal (a, b) ->
-        match tryProveGoal (depth + 1) a argBindings scope with
-        | Some newBindings ->
-            let bindings =
-                newBindings
-                |> List.map (fun bindingGroup -> Map.merge bindingGroup argBindings)
+        | DisjunctionGoal (a, b) ->
+            let args = { depth = depth + 1; goal = a; scope = scope; argBindings = argBindings; seen = seen |> Set.add goal }
             
-            // If we have at least one result then goal b was proved at least once with some set of bindings.
-            let result =
-                (Map.empty :: bindings)
-                |> List.choose (fun bindingGroup ->
-                    tryProveGoal (depth + 1) b bindingGroup scope
-                )
+            match tryProveGoal args with
+            | Some _ as result -> result
+            | None -> tryProveGoal { args with goal = b }
 
-            match result with
-            | [] -> None
-            | _ -> Some(
-                result
-                |> List.collect id
-                |> List.filter (Map.isEmpty >> not)
-            )
-            
-        | None -> None
+(*
+human(socrates).
+mortal(X) :- human(X).
+mortal(Y)?
 
-    | DisjunctionGoal (a, b) ->
-        match tryProveGoal (depth + 1) a argBindings scope with
-        | Some _ as result -> result
-        | None -> tryProveGoal (depth + 1) b argBindings scope 
+mother_child(trude, sally).
+father_child(tom, sally).
+father_child(tom, erica).
+father_child(mike, tom).
+sibling(X, Y)      :- parent_child(Z, X), parent_child(Z, Y).
+parent_child(X, Y) :- father_child(X, Y).
+parent_child(X, Y) :- mother_child(X, Y).
+ancestor(X, Y) :- parent_child(X, Y).
+ancestor(X, Y) :- parent_child(X, Z), ancestor(Z, Y).
+*)
 
 /// Query whether a given rule is true or false.
-let rec query (rule: Rule) (scope: Scope): Result<Map<string, SimpleTerm> list option, string> =
-    let (Rule(queryFunctor, queryArgs, queryGoal)) = rule
-    let testedGoal = SimpleGoal (queryFunctor, queryArgs)
-    
-    match queryGoal with
-    | SimpleGoal("true", [||]) ->
-        Ok (tryProveGoal 0 testedGoal Map.empty scope)
-
-    | SimpleGoal("false", [||]) ->
-        tryProveGoal 0 testedGoal Map.empty scope
-        |> Option.invert []
-        |> Ok
-    | _ ->
-        Error "Can't query for non yes or no answers!"
+let rec query (goal: Goal) (scope: Scope): Map<string, SimpleTerm> list option =
+    tryProveGoal {
+        depth = 0
+        goal = goal
+        scope = scope
+        argBindings = Map.empty
+        seen = Set.empty 
+    }

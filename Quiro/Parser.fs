@@ -109,9 +109,13 @@ type private GoalUnionKind = Conjunction | Disjunction
 
 let goal: _ Parser =
     let simpleGoal =
-        opt spaces >>. compoundParser .>> opt spaces
-        |>> fun (functor, args) ->
-            SimpleGoal(functor, args |> Option.map List.toArray |> Option.defaultValue Array.empty)
+        opt spaces >>. opt (pstring "\+") .>> opt spaces .>>. compoundParser .>> opt spaces
+        |>> fun (negated, (functor, args)) ->
+            let goal = SimpleGoal(functor, args |> Option.map List.toArray |> Option.defaultValue Array.empty)
+            
+            match negated with
+            | Some _ -> NegatedGoal(goal)
+            | None -> goal
             
     simpleGoal .>>. many (choice [
         charReturn ',' Conjunction .>>. simpleGoal
@@ -134,7 +138,12 @@ let rule: _ Parser =
             goal |> Option.defaultWith (fun () -> SimpleGoal("true", Array.empty))
         )
 
-let parse text =
+let parseRule text =
     match run rule text with
+    | Success(result, _, _) -> Result.Ok result
+    | Failure(message, _, _) -> Result.Error message
+    
+let parseGoal text =
+    match run goal text with
     | Success(result, _, _) -> Result.Ok result
     | Failure(message, _, _) -> Result.Error message
