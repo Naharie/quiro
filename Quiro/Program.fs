@@ -1,4 +1,5 @@
 ﻿open System
+open System.IO
 open Quiro
 open Quiro.DataTypes
 
@@ -6,14 +7,9 @@ open Quiro.DataTypes
 let main args =
     let mutable scope = Scope.defaultScope
  
-    printfn "Enter a rule followed by a period to create a new rule or enter a query followed by a question mark to test that query."
-    printfn "Only basic prolog syntax applies. Create a rules as normal [mortal(X) :- human(X).]."
-    printfn "Conjunction, disjunction, and negation may be performed, but parenthesis may not be used to order operations, create a sub rule instead."
-    printfn "There is no list destructuring syntax, use a goal of cons(Head, Tail, List) instead."
-    printfn "Similarly, there is no syntax for variable bindings, use equal(Var, Value) instead."
     printfn "You can use usage(Builtin) to view the usage for a builtin."
     printfn "[usage(Rule) :- describe(Rule, Desc), print(Desc), nl]"
-    printfn "Define describe(RuleFunctor, Description) to define usage for your own rules."
+    printfn "You can use .load <path> to load a script file."
     
     while true do
         printf "?- "
@@ -27,7 +23,23 @@ let main args =
             else
                 false, raw
 
-        if isQuery then
+        if code.StartsWith ".load " then
+            let path = code[6..].Trim('\'', '"')
+            
+            try
+                let scriptCode = File.ReadAllText path
+                
+                match Parser.parseScript scriptCode with
+                | Ok rules ->
+                    for rule in rules do
+                        scope <- Interpreter.execute rule scope
+                    
+                | Error parseError ->
+                    printfn $"%s{parseError}"
+            with
+            | err ->
+                printfn $"%O{err}"
+        elif isQuery then
             match Parser.parseGoal code with
             | Ok goal ->
                 match Interpreter.query goal scope with

@@ -1,13 +1,14 @@
 module Quiro.DataTypes
 
 open ExtendedNumerics
+open Microsoft.FSharp.Core
 
 type SimpleTerm =
-    | Atom of string
-    | Integer of bigint
-    | Float of BigDecimal
-    | Variable of string
-    | ListTerm of SimpleTerm list
+    | Atom of atom:string
+    | Integer of int:bigint
+    | Float of float:BigDecimal
+    | Variable of var:string
+    | ListTerm of list:SimpleTerm list
 
 module SimpleTerm =
     let rec toString (term: SimpleTerm) =
@@ -21,7 +22,6 @@ module SimpleTerm =
             |> List.map toString
             |> String.concat ", "
             |> fun body -> sprintf $"[ %s{body} ]"
-
 
 type Goal =
     | SimpleGoal of functor:string * arguments:SimpleTerm[]

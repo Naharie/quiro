@@ -200,8 +200,9 @@ let rec private tryProveGoal args: Map<string, SimpleTerm> list option =
                 | Some rule -> rule args
                 | None -> None
 
-        | NegatedGoal goal ->
-            Option.invert [] (tryProveGoal { depth = depth + 1; goal = goal; argBindings = argBindings; scope = scope; seen = seen |> Set.add goal })
+        | NegatedGoal subGoal ->
+            let provability = tryProveGoal { depth = depth + 1; goal = subGoal; argBindings = argBindings; scope = scope; seen = seen |> Set.add goal }
+            Option.invert [] provability
         
         | ConjunctionGoal (a, b) ->
             match tryProveGoal { depth = depth + 1; goal = a; argBindings = argBindings; scope = scope; seen = seen |> Set.add goal } with
@@ -237,7 +238,6 @@ let rec private tryProveGoal args: Map<string, SimpleTerm> list option =
 (*
 human(socrates).
 mortal(X) :- human(X).
-mortal(Y)?
 
 mother_child(trude, sally).
 father_child(tom, sally).
@@ -246,6 +246,7 @@ father_child(mike, tom).
 sibling(X, Y)      :- parent_child(Z, X), parent_child(Z, Y).
 parent_child(X, Y) :- father_child(X, Y).
 parent_child(X, Y) :- mother_child(X, Y).
+
 ancestor(X, Y) :- parent_child(X, Y).
 ancestor(X, Y) :- parent_child(X, Z), ancestor(Z, Y).
 *)

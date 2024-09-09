@@ -12,8 +12,8 @@
         <Compile Include="Map.fs" />
         <Compile Include="DataTypes.fs" />
         <Compile Include="Parser.fs" />
-        <Compile Include="Scope.fs" />
         <Compile Include="Interpreter.fs" />
+        <Compile Include="Scope.fs" />
         <Compile Include="Program.fs"/>
     </ItemGroup>
 
