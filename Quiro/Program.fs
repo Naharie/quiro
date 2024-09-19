@@ -7,9 +7,11 @@ open Quiro.DataTypes
 let main args =
     let mutable scope = Scope.defaultScope
  
-    printfn "You can use usage(Builtin) to view the usage for a builtin."
-    printfn "[usage(Rule) :- describe(Rule, Desc), print(Desc), nl]"
+    printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
+    
+    // TODO: Temp
+    printfn $"%A{Parser.parseExpression (Console.ReadLine())}"
     
     while true do
         printf "?- "
@@ -30,9 +32,9 @@ let main args =
                 let scriptCode = File.ReadAllText path
                 
                 match Parser.parseScript scriptCode with
-                | Ok rules ->
-                    for rule in rules do
-                        scope <- Interpreter.execute rule scope
+                | Ok declarations ->
+                    for declaration in declarations do
+                        scope <- Interpreter.execute declaration scope
                     
                 | Error parseError ->
                     printfn $"%s{parseError}"
@@ -43,23 +45,28 @@ let main args =
             match Parser.parseGoal code with
             | Ok goal ->
                 match Interpreter.query goal scope with
-                | Some bindings ->
-                    printfn "Yes"
-                    printfn ""
+                | Ok status ->
+                    match status with
+                    | Some bindings ->
+                        printfn "Yes"
+                        printfn ""
 
-                    for bindingGroup in bindings do
-                        for KeyValue(variable, value) in bindingGroup do
-                            printfn $"%s{variable} = %s{SimpleTerm.toString value}"
+                        for bindingGroup in bindings do
+                            for KeyValue(variable, value) in bindingGroup do
+                                printfn $"%s{variable} = %s{Expression.toString value}"
 
-                        printfn ""  
+                            printfn ""  
 
-                | None -> printfn "No\r\n"
+                    | None -> printfn "No\r\n"
+                    
+                | Error error ->
+                    PrologError.displayError error
             | Error message ->
                 printfn $"%s{message}"
         else
-            match Parser.parseRule code with
-            | Ok rule ->
-                scope <- Interpreter.execute rule scope
+            match Parser.parseDeclaration code with
+            | Ok declaration ->
+                scope <- Interpreter.execute declaration scope
                 printfn "Stored"
             | Error message ->
                 printfn $"%s{message}"
