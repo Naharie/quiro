@@ -191,13 +191,16 @@ let simpleGoal: _ Parser =
             DynamicGoal(functor, args |> Option.defaultValue List.empty)
         else
             SimpleGoal(functor, args |> Option.defaultValue List.empty)
+let negatedGoal: _ Parser =
+    skipString "\+" .>> ws >>. goal
+    |>> NegatedGoal
 
 let junctionGoal = OperatorPrecedenceParser<Goal, unit, unit>()
 
 junctionGoal.AddOperator(InfixOperator(",", ws, 1100, Associativity.Left, fun a b -> ConjunctionGoal(a, b)))
 junctionGoal.AddOperator(InfixOperator(";", ws, 1000, Associativity.Left, fun a b -> DisjunctionGoal(a, b)))
 
-junctionGoal.TermParser <- (attempt comparisonGoal <|> simpleGoal)
+junctionGoal.TermParser <- (attempt comparisonGoal <|> simpleGoal <|> negatedGoal)
 
 goalRef.Value <- junctionGoal.ExpressionParser
 
