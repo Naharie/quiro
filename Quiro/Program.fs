@@ -55,7 +55,27 @@ let main args =
 
                         for bindingGroup in bindings do
                             for KeyValue(variable, value) in bindingGroup do
-                                printfn $"%s{variable} = %s{Expression.toString value}"
+                                match value with
+                                | ListTerm values ->
+                                    let isText = values |> List.forall(function | Number (Float v) -> v.DecimalPlaces <= 0 | _ -> false)
+                                    
+                                    if isText then
+                                        let text =
+                                            values
+                                            |> List.map (function
+                                                | Number (Float v) -> char v.WholeValue
+                                                | _ -> ' '
+                                            )
+                                            |> List.toArray
+                                            |> String
+                                            |> _.Replace("\\", "\\\\").Replace("\"", "\\\"")
+                                        
+                                        printfn $"%s{variable} = \"%s{text}\""
+                                    else
+                                        printfn $"%s{variable} = %s{Expression.toString value}"
+
+                                | _ ->
+                                    printfn $"%s{variable} = %s{Expression.toString value}"
 
                             if bindingGroup.Count > 1 then
                                 printfn ""  
