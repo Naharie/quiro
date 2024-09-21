@@ -337,7 +337,7 @@ module rec Internal =
             scope
             |> Scope.lookupValue name
             |> Option.map (fun value -> [ value, Map.empty ])
-            |> Option.defaultWith (fun () -> raise (UnboundVariableException (name, stack)))
+            |> Option.defaultValue [ expr, Map.empty ]
     
         | FunctionCall (functor, args) ->
             let key = (functor, args.Length)
