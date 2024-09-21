@@ -257,7 +257,6 @@ let remainder = mathFunc (%)
 let exponentiation = mathFunc _.Pow
 
 let defaultScope = {
-   parent = None
    values = Map.ofArray [|
        "nan", Number NaN
        "infinity", Number (Infinity true)

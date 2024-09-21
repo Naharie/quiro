@@ -238,11 +238,7 @@ module rec Internal =
             | Some bindings -> true, bindings
             | None -> false, Map.empty
          
-        let subScope = {
-            emptyScope with
-                parent = Some scope
-                values = argBindings 
-        }
+        let subScope = { scope with values = argBindings  }
         
         match trace with
         | All | OnlyTrue ->
@@ -326,11 +322,7 @@ module rec Internal =
                         depth = depth + 1
                         trace = trace
                         expression = tail
-                        scope = {
-                            emptyScope with
-                                parent = Some scope
-                                values = Map.empty 
-                        }
+                        scope = scope
                         
                         seenGoals = seenGoals
                         seenFunctions = seenFunctions 
@@ -491,12 +483,8 @@ module rec Internal =
             match rawArgBindings with
             | Some bindings -> true, bindings
             | None -> false, Map.empty
-            
-        let subScope = {
-            emptyScope with
-                parent = Some scope
-                values = argBindings 
-        }
+
+        let subScope = { scope with values = argBindings  }
         
         match trace with
         | All | RuleOnly | OnlyTrue ->
@@ -702,7 +690,7 @@ module rec Internal =
                             trace = trace
                             
                             goal = b
-                            scope = { emptyScope with parent = Some scope; values = bindingSetA; }
+                            scope = { scope with values = Map.merge bindingSetA scope.values }
                             
                             seenGoals = seenGoals 
                             seenFunctions = seenFunctions

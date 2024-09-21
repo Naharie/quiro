@@ -69,8 +69,6 @@ type Context = {
     scope: Scope
 }
 and Scope = {
-    parent: Scope option
-
     values: Map<string, Expression>
     
     predicates: Map<(string * int), Predicate list>
@@ -83,7 +81,6 @@ and Scope = {
 // Helper Values
 
 let emptyScope = {
-    parent = None
     values = Map.empty
     
     predicates = Map.empty
@@ -101,52 +98,36 @@ module Scope =
     
     let lookupPredicates (key: string * int) (scope: Scope) =
         [|
-            let mutable currentScope = Some scope
-            
-            while Option.isSome currentScope do
-                match currentScope with
-                | Some wrappedScope ->
-                    yield!
-                        wrappedScope.predicates
-                        |> Map.tryFind key
-                        |> Option.defaultValue List.empty
-                        |> List.toArray
-                        |> Array.map Choice1Of2
+            yield!
+                scope.predicates
+                |> Map.tryFind key
+                |> Option.defaultValue List.empty
+                |> List.toArray
+                |> Array.map Choice1Of2
 
-                    yield!
-                        wrappedScope.nativePredicates
-                        |> Map.tryFind key
-                        |> Option.defaultValue List.empty
-                        |> List.toArray
-                        |> Array.map Choice2Of2
-                        
-                    currentScope <- wrappedScope.parent
-                | None -> ()
+            yield!
+                scope.nativePredicates
+                |> Map.tryFind key
+                |> Option.defaultValue List.empty
+                |> List.toArray
+                |> Array.map Choice2Of2
         |]
    
     let lookupFunctions (key: string * int) (scope: Scope) =
         [|
-            let mutable currentScope = Some scope
-            
-            while Option.isSome currentScope do
-                match currentScope with
-                | Some wrappedScope ->
-                    yield!
-                        wrappedScope.functions
-                        |> Map.tryFind key
-                        |> Option.defaultValue List.empty
-                        |> List.toArray
-                        |> Array.map Choice1Of2
+            yield!
+                scope.functions
+                |> Map.tryFind key
+                |> Option.defaultValue List.empty
+                |> List.toArray
+                |> Array.map Choice1Of2
 
-                    yield!
-                        wrappedScope.nativeFunctions
-                        |> Map.tryFind key
-                        |> Option.defaultValue List.empty
-                        |> List.toArray
-                        |> Array.map Choice2Of2
-                        
-                    currentScope <- wrappedScope.parent
-                | None -> ()
+            yield!
+                scope.nativeFunctions
+                |> Map.tryFind key
+                |> Option.defaultValue List.empty
+                |> List.toArray
+                |> Array.map Choice2Of2
         |]
 
 module Expression =
