@@ -100,6 +100,17 @@ module rec Internal =
                     | other -> other
                 )
             )
+        | DynamicGoal(functor, args) ->
+            DynamicGoal(
+                functor,
+                args
+                |> Array.map(function
+                    | Variable name as var ->
+                        Scope.lookupValue name scope
+                        |> Option.defaultValue var
+                    | other -> other
+                )
+            )
         | NegatedGoal goal -> NegatedGoal (substituteVarsInGoal scope goal)
         | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVarsInGoal scope a, substituteVarsInGoal scope b)
         | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVarsInGoal scope a, substituteVarsInGoal scope b)
@@ -113,6 +124,8 @@ module rec Internal =
         
         | FunctionCall(target, args) ->
             FunctionCall(target, args |> Array.map (substituteVarsInExpr scope))
+        | DynamicFunctionCall(target, args) ->
+            DynamicFunctionCall(target, args |> Array.map (substituteVarsInExpr scope))
         
         | Variable name ->
             Scope.lookupValue name scope
@@ -375,6 +388,18 @@ module rec Internal =
                         raise (PrologException(error.Message, stack, error))
             ) []
     
+        | DynamicFunctionCall (var, funcArgs) ->
+            match Scope.lookupValue var scope with
+            | Some (Atom name) ->
+                evaluateExpr { args with depth = depth + 1; expression = FunctionCall(name, funcArgs) }
+               
+            | Some _ ->
+                let message = "Can't perform a dynamic function invocation against a variable bound to something other than an atom!"
+                raise (PrologException(message, stack, InvalidOperationException(message)))
+                
+            | None ->
+                raise (UnboundVariableException(var, stack))
+    
     /// Tests a rule against a goal to see if it matches, creating a table of any required bindings when it does.
     let private testRule args : Map<string, Expression> list option =
         let {
@@ -400,7 +425,15 @@ module rec Internal =
             |> Array.fold (fun argBindings (ruleArg, concreteArg) ->
                 match argBindings with
                 | Some argBindings ->
-                    checkArgMatch ruleArg concreteArg argBindings
+                    match concreteArg with
+                    | Variable name ->
+                        let concreteArg =
+                            Scope.lookupValue name scope
+                            |> Option.defaultValue concreteArg
+                    
+                        checkArgMatch ruleArg concreteArg argBindings
+                    | _ ->
+                        checkArgMatch ruleArg concreteArg argBindings
                 | None -> None
             ) (Some Map.empty)
         let isMatch, argBindings =
@@ -561,7 +594,18 @@ module rec Internal =
                     ) (false, [])
                 
                 if success then Some bindings else None
-
+            | DynamicGoal (var, goalArgs) ->
+                match Scope.lookupValue var scope with
+                | Some (Atom name) ->
+                    tryProveGoal { args with depth = depth + 1; goal = SimpleGoal(name, goalArgs) }
+                   
+                | Some _ ->
+                    let message = "Can't perform a dynamic predicate invocation against a variable bound to something other than an atom!"
+                    raise (PrologException(message, stack, InvalidOperationException(message)))
+                    
+                | None ->
+                    raise (UnboundVariableException(var, stack))
+            
             | NegatedGoal subGoal ->
                 let provability = tryProveGoal {
                     depth = depth + 1

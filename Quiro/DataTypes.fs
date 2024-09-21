@@ -12,12 +12,16 @@ type Expression =
     | ListTerm of list:Expression list
     
     | FunctionCall of target:string * args:Expression[]
+    | DynamicFunctionCall of var:string * args:Expression[]
+    
     | Variable of name:string
     | ListCons of head:Expression * tail:Expression
     | GoalExpr of Goal
 
 type Goal =
     | SimpleGoal of functor:string * arguments:Expression[]
+    | DynamicGoal of var:string * arguments:Expression[]
+
     | NegatedGoal of Goal
     | ConjunctionGoal of Goal * Goal
     | DisjunctionGoal of Goal * Goal 
@@ -164,7 +168,7 @@ module Expression =
             |> fun body -> sprintf $"[ %s{body} ]"
         | ListCons (head, tail) ->
             sprintf $"[ %s{toString head} | %s{toString tail} ]"
-        | FunctionCall(functor, args) ->
+        | FunctionCall(functor, args) | DynamicFunctionCall(functor, args) ->
             let args =
                 args
                 |> Array.map toString
@@ -178,7 +182,7 @@ module Goal =
     let rec toString goal =
         match goal with
         | SimpleGoal(goal, [||]) -> goal
-        | SimpleGoal(functor, args) ->
+        | SimpleGoal(functor, args) | DynamicGoal(functor, args) ->
             let argsStr = args |> Array.map Expression.toString |> String.concat ", "
             $"%s{functor}(%s{argsStr})"
         | NegatedGoal goal ->

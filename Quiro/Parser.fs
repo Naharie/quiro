@@ -114,15 +114,21 @@ let compoundParser: _ Parser =
     let separator = skipChar ','
     
     let argsParser = between startArgs endArgs (sepBy expressionNoComma separator)
-    atomParser .>>. opt argsParser
-let functionCallOrAtomExpression: _ Parser =
+    (atomParser <|> variableParser) .>>. opt argsParser
+let functionCallAtomOrVar: _ Parser =
     compoundParser
     |>> fun (functor, args) ->
         match args with
         | Some args ->
-            FunctionCall(functor, List.toArray args)
+            if Char.IsUpper functor[0] then
+                DynamicFunctionCall(functor, List.toArray args)
+            else
+                FunctionCall(functor, List.toArray args)
         | None ->
-            Atom functor
+            if Char.IsUpper functor[0] then
+                Variable functor
+            else
+                Atom functor
 
 let goal, goalRef = createParserForwardedToRef() : Parser<Goal> * Parser<Goal> ref
 
@@ -151,8 +157,7 @@ let private addExpressionOperators (doComma: bool) (operatorExpression: Operator
     op "^" 400
 
 operatorCommaExpression.TermParser <- ws >>. choice [
-    functionCallOrAtomExpression
-    variableExpr
+    functionCallAtomOrVar
     numberExpr
     textExpr
     (attempt listConsExpr <|> listExpression)
@@ -183,7 +188,10 @@ let comparisonGoal: _ Parser =
 let simpleGoal: _ Parser =
     compoundParser
     |>> fun (functor, args) ->
-        SimpleGoal(functor, args |> Option.defaultValue List.empty |> List.toArray)
+        if Char.IsUpper functor[0] then
+            DynamicGoal(functor, args |> Option.defaultValue List.empty |> List.toArray)
+        else
+            SimpleGoal(functor, args |> Option.defaultValue List.empty |> List.toArray)
 
 let junctionGoal = OperatorPrecedenceParser<Goal, unit, unit>()
 
