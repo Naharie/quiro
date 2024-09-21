@@ -27,10 +27,8 @@ let main args =
 
         if String.IsNullOrWhiteSpace code then ()
         elif code.StartsWith ".load " then
-            let path = code[6..].Trim('\'', '"')
-            
             try
-                let scriptCode = File.ReadAllText path
+                let scriptCode = File.ReadAllText (code[6..].Trim('\'', '"'))
                 
                 match Parser.parseScript scriptCode with
                 | Ok declarations ->
