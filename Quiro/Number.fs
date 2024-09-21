@@ -73,16 +73,16 @@ with
         Number.PerformOpI opN opR (fun _ -> Infinity) a b
 
     static member (+) (a, b) = Number.PerformOpI (+) (+) (fun _ -> Infinity) a b
-    static member (-) (a, b) = Number.PerformOpI (+) (+) (fun _ p -> Infinity (not p)) a b
+    static member (-) (a, b) = Number.PerformOpI (-) (-) (fun _ p -> Infinity (not p)) a b
 
-    static member (*) (a, b) = Number.PerformOp (+) (+) a b
+    static member (*) (a, b) = Number.PerformOp (*) (*) a b
     static member (/) (a, b) =
         match b with
         | Float v when v.IsZero() -> raise (DivideByZeroException())
         | _ ->
-            Number.PerformOp (+) (+) a b
+            Number.PerformOp (/) (/) a b
     
-    static member (%) (a, b) = Number.PerformOp (+) (+) a b
+    static member (%) (a, b) = Number.PerformOp (%) (%) a b
     member a.Modulus b = Number.PerformOp _.Modulus _.Modulus a b
     
     member a.Pow b =

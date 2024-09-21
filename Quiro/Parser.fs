@@ -179,8 +179,7 @@ let comparisonGoal: _ Parser =
         pstring "<="
         pstring ">"
         pstring ">="
-        pstring "="
-        pstring "=:="
+        (attempt (pstring "=:=") <|> pstring "=")
         pstring "is"
     ] .>>. expressionNoComma
     |>> fun ((exprA, op), exprB) ->

@@ -372,53 +372,65 @@ module rec Internal =
             let key = (functor, args.Length)
             let functions = Scope.lookupFunctions key scope
             
-            functions
-            |> Array.fold (fun values ``function`` ->
-                match ``function`` with
-                | Choice1Of2 userFunction ->
-                    let funcArgs = {
-                        depth = depth + 1
-                        trace = trace
+            evalArgs {
+                depth = depth + 1
+                trace = trace
+                scope = scope
+                
+                seenExpressions = seenExpressions |> Set.add expr 
+                seenGoals = seenGoals
+                stack = (ExpressionFrame expr) :: stack
+            } args
+            |> List.map (fun args ->
+                functions
+                |> Array.fold (fun values ``function`` ->
+                    match ``function`` with
+                    | Choice1Of2 userFunction ->
+                        let funcArgs = {
+                            depth = depth + 1
+                            trace = trace
+                            
+                            func = userFunction
+                            currentExpr = functor, args 
+                            scope = scope
+                            
+                            seenGoals = seenGoals
+                            seenExpressions = seenExpressions |> Set.add expr 
+                            stack = (ExpressionFrame expr) :: stack 
+                        }
                         
-                        func = userFunction
-                        currentExpr = functor, args 
-                        scope = scope
-                        
-                        seenGoals = seenGoals
-                        seenExpressions = seenExpressions |> Set.add expr 
-                        stack = (ExpressionFrame expr) :: stack 
-                    }
-                    
-                    match testFunction funcArgs with
-                    | Some results -> List.append results values
-                    | None -> values
-                    
-                | Choice2Of2 nativeFunction ->
-                    let context: Context = {
-                        depth = depth + 1
-                        trace = trace
-                        
-                        seenGoals = seenGoals
-                        seenExpressions = seenExpressions
-                        
-                        stack = (ExpressionFrame expr) :: stack
-                        scope = scope
-                    }
-
-                    try
-                        match nativeFunction context args with
-                        | Some results ->
-                            let results =
-                                results
-                                |> List.map (fun expr -> expr, Map.empty)
-
-                            List.append results values
+                        match testFunction funcArgs with
+                        | Some results -> List.append results values
                         | None -> values
-                    with
-                    | :? PrologException -> reraise()
-                    | error ->
-                        raise (PrologException(error.Message, stack, error))
-            ) []
+                        
+                    | Choice2Of2 nativeFunction ->
+                        let context: Context = {
+                            depth = depth + 1
+                            trace = trace
+                            
+                            seenGoals = seenGoals
+                            seenExpressions = seenExpressions
+                            
+                            stack = (ExpressionFrame expr) :: stack
+                            scope = scope
+                        }
+
+                        try
+                            match nativeFunction context args with
+                            | Some results ->
+                                let results =
+                                    results
+                                    |> List.map (fun expr -> expr, Map.empty)
+
+                                List.append results values
+                            | None -> values
+                        with
+                        | :? PrologException -> reraise()
+                        | error ->
+                            raise (PrologException(error.Message, stack, error))
+                ) []
+            )
+            |> List.collect id
     
         | DynamicFunctionCall (var, funcArgs) ->
             match Scope.lookupValue var scope with
@@ -586,60 +598,60 @@ module rec Internal =
                     seenExpressions = seenExpressions
                     stack = (GoalFrame goal) :: stack 
                 } args
-                |> ignore
-                
-                ()
-                
-                let success, bindings =
-                    predicates
-                    |> Array.fold (fun (success, existingBindings) predicate ->
-                        match predicate with
-                        | Choice1Of2 userPredicate ->
-                            let ruleArgs = {
-                                depth = depth + 1
-                                trace = trace
-                                
-                                currentGoal = (functor, args)
-                                scope = scope
-                                
-                                predicate = userPredicate
-                                
-                                seenGoals = seenGoals |> Set.add expandedGoal
-                                seenExpressions = seenExpressions 
-                                stack = (GoalFrame expandedGoal) :: stack 
-                            }
+                |> List.choose (fun args ->
+                    let success, bindings =
+                        predicates
+                        |> Array.fold (fun (success, existingBindings) predicate ->
+                            match predicate with
+                            | Choice1Of2 userPredicate ->
+                                let ruleArgs = {
+                                    depth = depth + 1
+                                    trace = trace
+                                    
+                                    currentGoal = (functor, args)
+                                    scope = scope
+                                    
+                                    predicate = userPredicate
+                                    
+                                    seenGoals = seenGoals |> Set.add expandedGoal
+                                    seenExpressions = seenExpressions 
+                                    stack = (GoalFrame expandedGoal) :: stack 
+                                }
 
-                            match testRule ruleArgs with
-                            | Some newBindings ->
-                                (true, List.append newBindings existingBindings)
-                            | None ->
-                                (success, existingBindings)
-                            
-                        | Choice2Of2 nativePredicate ->
-                            let context: Context = {
-                                depth = depth + 1
-                                trace = trace
-                                
-                                seenGoals = seenGoals
-                                seenExpressions = seenExpressions
-                                
-                                stack = (GoalFrame goal) :: stack
-                                scope = scope
-                            }
-
-                            try
-                                match nativePredicate context args with
-                                | Some bindings ->
-                                    (true, List.append bindings existingBindings)
+                                match testRule ruleArgs with
+                                | Some newBindings ->
+                                    (true, List.append newBindings existingBindings)
                                 | None ->
                                     (success, existingBindings)
-                            with
-                            | :? PrologException -> reraise()
-                            | error ->
-                                raise (PrologException(error.Message, stack, error))
-                    ) (false, [])
-                
-                if success then Some bindings else None
+                                
+                            | Choice2Of2 nativePredicate ->
+                                let context: Context = {
+                                    depth = depth + 1
+                                    trace = trace
+                                    
+                                    seenGoals = seenGoals
+                                    seenExpressions = seenExpressions
+                                    
+                                    stack = (GoalFrame goal) :: stack
+                                    scope = scope
+                                }
+
+                                try
+                                    match nativePredicate context args with
+                                    | Some bindings ->
+                                        (true, List.append bindings existingBindings)
+                                    | None ->
+                                        (success, existingBindings)
+                                with
+                                | :? PrologException -> reraise()
+                                | error ->
+                                    raise (PrologException(error.Message, stack, error))
+                        ) (false, [])
+                    
+                    if success then Some bindings else None
+                )
+                |> List.collect id
+                |> List.noneOnEmpty
             | DynamicGoal (var, goalArgs) ->
                 match Scope.lookupValue var scope with
                 | Some (Atom name) ->
