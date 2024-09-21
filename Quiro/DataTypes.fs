@@ -11,23 +11,23 @@ type Expression =
     | Number of Number
     | ListTerm of list:Expression list
     
-    | FunctionCall of target:string * args:Expression[]
-    | DynamicFunctionCall of var:string * args:Expression[]
+    | FunctionCall of target:string * args:Expression list
+    | DynamicFunctionCall of var:string * args:Expression list
     
     | Variable of name:string
     | ListCons of head:Expression * tail:Expression
     | GoalExpr of Goal
 
 type Goal =
-    | SimpleGoal of functor:string * arguments:Expression[]
-    | DynamicGoal of var:string * arguments:Expression[]
+    | SimpleGoal of functor:string * arguments:Expression list
+    | DynamicGoal of var:string * arguments:Expression list
 
     | NegatedGoal of Goal
     | ConjunctionGoal of Goal * Goal
     | DisjunctionGoal of Goal * Goal 
 
-type Predicate = Predicate of functor:string * arguments:Expression[] * goal:Goal
-type Function = Function of functor:string * arguments:Expression[] * body:Expression
+type Predicate = Predicate of functor:string * arguments:Expression list * goal:Goal
+type Function = Function of functor:string * arguments:Expression list * body:Expression
 
 type Declaration =
     | PredicateDeclaration of predicate:Predicate
@@ -75,10 +75,10 @@ and Scope = {
     values: Map<string, Expression>
     
     predicates: Map<(string * int), Predicate list>
-    nativePredicates: Map<string * int, (Context -> Expression[] -> Map<string, Expression> list option) list>
+    nativePredicates: Map<string * int, (Context -> Expression list -> Map<string, Expression> list option) list>
     
     functions: Map<(string * int), Function list>
-    nativeFunctions: Map<string * int, (Context -> Expression[] -> Expression list option) list>
+    nativeFunctions: Map<string * int, (Context -> Expression list -> Expression list option) list>
 }
 
 // Helper Values
@@ -171,7 +171,7 @@ module Expression =
         | FunctionCall(functor, args) | DynamicFunctionCall(functor, args) ->
             let args =
                 args
-                |> Array.map toString
+                |> List.map toString
                 |> String.concat ", "
             
             $"%s{functor}(%s{args})"
@@ -181,9 +181,9 @@ module Expression =
 module Goal =
     let rec toString goal =
         match goal with
-        | SimpleGoal(goal, [||]) -> goal
+        | SimpleGoal(goal, []) -> goal
         | SimpleGoal(functor, args) | DynamicGoal(functor, args) ->
-            let argsStr = args |> Array.map Expression.toString |> String.concat ", "
+            let argsStr = args |> List.map Expression.toString |> String.concat ", "
             $"%s{functor}(%s{argsStr})"
         | NegatedGoal goal ->
             "\+ " + toString goal
@@ -212,13 +212,13 @@ module StackFrame =
 module Predicate =
     let toString predicate =
         let (Predicate (name, args, _)) = predicate
-        let args = args |> Array.map Expression.toString |> String.concat ", "
+        let args = args |> List.map Expression.toString |> String.concat ", "
         sprintf $"%s{name}(%s{args}) :-"
 
 module Function =
     let toString ``function`` =
         let (Function (name, args, _)) = ``function``
-        let args = args |> Array.map Expression.toString |> String.concat ", "
+        let args = args |> List.map Expression.toString |> String.concat ", "
         sprintf $"%s{name}(%s{args}) -->"
 
 module Declaration =

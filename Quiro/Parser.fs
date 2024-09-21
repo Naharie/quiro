@@ -121,9 +121,9 @@ let functionCallAtomOrVar: _ Parser =
         match args with
         | Some args ->
             if Char.IsUpper functor[0] then
-                DynamicFunctionCall(functor, List.toArray args)
+                DynamicFunctionCall(functor, args)
             else
-                FunctionCall(functor, List.toArray args)
+                FunctionCall(functor, args)
         | None ->
             if Char.IsUpper functor[0] then
                 Variable functor
@@ -140,7 +140,7 @@ let operatorNoCommaExpression = OperatorPrecedenceParser<Expression, unit, unit>
 
 let private addExpressionOperators (doComma: bool) (operatorExpression: OperatorPrecedenceParser<Expression, unit, unit>) =
     let op name precedence =
-        operatorExpression.AddOperator(InfixOperator(name, ws, precedence, Associativity.Left, fun a b -> FunctionCall(name, [| a; b |])))
+        operatorExpression.AddOperator(InfixOperator(name, ws, precedence, Associativity.Left, fun a b -> FunctionCall(name, [ a; b ])))
 
     if doComma then op "," 100
 
@@ -184,14 +184,14 @@ let comparisonGoal: _ Parser =
         pstring "is"
     ] .>>. expressionNoComma
     |>> fun ((exprA, op), exprB) ->
-        SimpleGoal(op, [| exprA; exprB |])
+        SimpleGoal(op, [ exprA; exprB ])
 let simpleGoal: _ Parser =
     compoundParser
     |>> fun (functor, args) ->
         if Char.IsUpper functor[0] then
-            DynamicGoal(functor, args |> Option.defaultValue List.empty |> List.toArray)
+            DynamicGoal(functor, args |> Option.defaultValue List.empty)
         else
-            SimpleGoal(functor, args |> Option.defaultValue List.empty |> List.toArray)
+            SimpleGoal(functor, args |> Option.defaultValue List.empty)
 
 let junctionGoal = OperatorPrecedenceParser<Goal, unit, unit>()
 
@@ -208,10 +208,7 @@ let declaration: _ Parser =
         skipString "-->" >>. ws >>. expressionWithComma |>> Choice2Of2
     ]) .>> ws .>> skipChar '.'
     |>> fun ((functor, args), body) ->
-        let args =
-            args
-            |> Option.defaultValue List.empty
-            |> List.toArray
+        let args = args |> Option.defaultValue List.empty
 
         match body with
         | Some body ->
@@ -221,7 +218,7 @@ let declaration: _ Parser =
              | Choice2Of2 expression ->
                  FunctionDeclaration(Function(functor, args, expression))
         | None ->
-            PredicateDeclaration (Predicate (functor, args, SimpleGoal ("true", Array.empty)))
+            PredicateDeclaration (Predicate (functor, args, SimpleGoal ("true", List.empty)))
 
 let comment: _ Parser = (ws) >>. skipChar '%' >>. manyChars (noneOf [ '\r'; '\t' ]) .>> ws
 

@@ -8,39 +8,10 @@ open Microsoft.FSharp.Core
 open Quiro.DataTypes
 open Quiro.Interpreter
 
-let rec evalArgs (context: Context) args : Expression list list =
-    match args with
-    | [] -> [ [] ]
-    | arg :: args ->
-        let arg = Internal.evaluateExpr {
-            depth = context.depth + 1
-            trace = context.trace
-            
-            expression = arg
-            scope = context.scope
-            
-            seenGoals = context.seenGoals
-            seenExpressions = context.seenExpressions
-            stack = (NativeFunction "," :: context.stack)
-        }
-        
-        arg
-        |> List.map (fun (value, bindings) ->
-            let scope = {
-                context.scope with
-                    values = Map.merge context.scope.values bindings 
-            }
-            let context = { context with scope = scope }
-            
-            evalArgs context args
-            |> List.map (fun argSet -> value :: argSet)
-        )
-        |> List.collect id
-
 // Native Predicates
 
 let private makePred (handler : _ -> Map<string, Expression> list option) context args : Map<string, Expression> list option =
-    evalArgs context (Array.toList args)
+    Internal.evalArgs context args
     |> List.choose handler
     |> List.noneOnEmpty
     |> Option.map (List.collect id)
@@ -85,10 +56,10 @@ let nl _ _ =
     Some [ Map.empty ]
 
 let private one = Float BigDecimal.One
-let private mathCompPred name (leftVar: Number -> Expression list) (rightVar: Number -> Expression list) concrete (context: Context) (args: Expression[]) =
+let private mathCompPred name (leftVar: Number -> Expression list) (rightVar: Number -> Expression list) concrete context args =
     let badUsage() = invalidOp $"Can't use the %s{name} predicate on non numbers"
     
-    evalArgs context (Array.toList args)
+    Internal.evalArgs context args
     |> List.choose (fun args ->
         match args with
         | [ Variable _; Variable _ ] -> raise (InsufficientSubstantiationException("<", context.stack))
@@ -208,9 +179,9 @@ let greaterThanOrEqual =
             )
             (>=)
 
-let exprEqual (_: Context) (args: Expression[]) =
+let exprEqual (_: Context) (args: Expression list) =
     match args with
-    | [| a; b |] ->
+    | [ a; b ] ->
         if a = b then Some [] else None
     | _ -> None
 let valEqual = makePred (function
@@ -219,9 +190,9 @@ let valEqual = makePred (function
     | _ -> None
 )
 
-let isOp (context: Context) (args: Expression[]) =
+let isOp (context: Context) (args: Expression list) =
     match args with
-    | [| left; right |] ->
+    | [ left; right ] ->
         let right = Internal.evaluateExpr {
             depth = context.depth + 1
             trace = context.trace
@@ -265,7 +236,7 @@ let isOp (context: Context) (args: Expression[]) =
 // Native Functions
 
 let private makeFunc (handler: Expression list -> Expression option) (context: Context) args =
-    evalArgs context (Array.toList args)
+    Internal.evalArgs context args
     |> List.choose handler
     |> List.noneOnEmpty
 let private mathFunc handler =

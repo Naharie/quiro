@@ -51,7 +51,7 @@ module rec Internal =
         depth: int
         trace: Trace
         
-        currentGoal: string * Expression[]
+        currentGoal: string * Expression list
         predicate: Predicate
         
         scope: Scope
@@ -77,7 +77,7 @@ module rec Internal =
         depth: int
         trace: Trace
         
-        currentExpr: string * Expression[]
+        currentExpr: string * Expression list
         func: Function
         
         scope: Scope
@@ -93,7 +93,7 @@ module rec Internal =
             SimpleGoal(
                 functor,
                 args
-                |> Array.map(function
+                |> List.map(function
                     | Variable name as var ->
                         Scope.lookupValue name scope
                         |> Option.defaultValue var
@@ -104,7 +104,7 @@ module rec Internal =
             DynamicGoal(
                 functor,
                 args
-                |> Array.map(function
+                |> List.map(function
                     | Variable name as var ->
                         Scope.lookupValue name scope
                         |> Option.defaultValue var
@@ -123,9 +123,9 @@ module rec Internal =
             ListTerm (values |> List.map (substituteVarsInExpr scope))
         
         | FunctionCall(target, args) ->
-            FunctionCall(target, args |> Array.map (substituteVarsInExpr scope))
+            FunctionCall(target, args |> List.map (substituteVarsInExpr scope))
         | DynamicFunctionCall(target, args) ->
-            DynamicFunctionCall(target, args |> Array.map (substituteVarsInExpr scope))
+            DynamicFunctionCall(target, args |> List.map (substituteVarsInExpr scope))
         
         | Variable name ->
             Scope.lookupValue name scope
@@ -176,6 +176,35 @@ module rec Internal =
             | _ ->
                 if ruleArg = concreteArg then Some argBindings else None
   
+    let rec evalArgs (context: Context) args : Expression list list =
+        match args with
+        | [] -> [ [] ]
+        | arg :: args ->
+            let arg = Internal.evaluateExpr {
+                depth = context.depth + 1
+                trace = context.trace
+                
+                expression = arg
+                scope = context.scope
+                
+                seenGoals = context.seenGoals
+                seenExpressions = context.seenExpressions
+                stack = (NativeFunction "," :: context.stack)
+            }
+            
+            arg
+            |> List.map (fun (value, bindings) ->
+                let scope = {
+                    context.scope with
+                        values = Map.merge context.scope.values bindings 
+                }
+                let context = { context with scope = scope }
+                
+                evalArgs context args
+                |> List.map (fun argSet -> value :: argSet)
+            )
+            |> List.collect id
+    
     let private testFunction args : (Expression * Map<string, Expression>) list option =
         let {
             depth = depth
@@ -191,13 +220,13 @@ module rec Internal =
         } = args
         
         let (Function(_, funcArgs, body)) = func
-        let argPairs = Array.zip funcArgs callArgs
+        let argPairs = List.zip funcArgs callArgs
         
         /// Build a mapping of variable names used in the goal to the supplied concrete values,
         /// all the while checking that any non-variable arguments the rule demands are satisfied.
         let rawArgBindings =
             argPairs
-            |> Array.fold (fun argBindings (funcArg, concreteArg) ->
+            |> List.fold (fun argBindings (funcArg, concreteArg) ->
                 match argBindings with
                 | Some argBindings ->
                     checkArgMatch funcArg concreteArg argBindings
@@ -218,7 +247,7 @@ module rec Internal =
         | All | OnlyTrue ->
             let ruleArgs =
                 funcArgs
-                |> Array.map(function
+                |> List.map(function
                     | Variable name as var ->
                         argBindings
                         |> Map.tryFind name
@@ -419,13 +448,13 @@ module rec Internal =
             stack = stack
         } = args
         
-        let argPairs = Array.zip ruleArgs outerArgs
+        let argPairs = List.zip ruleArgs outerArgs
         
         /// Build a mapping of variable names used in the goal to the supplied concrete values,
         /// all the while checking that any non-variable arguments the rule demands are satisfied.
         let rawArgBindings =
             argPairs
-            |> Array.fold (fun argBindings (ruleArg, concreteArg) ->
+            |> List.fold (fun argBindings (ruleArg, concreteArg) ->
                 match argBindings with
                 | Some argBindings ->
                     match concreteArg with
@@ -439,6 +468,7 @@ module rec Internal =
                         checkArgMatch ruleArg concreteArg argBindings
                 | None -> None
             ) (Some Map.empty)
+        
         let isMatch, argBindings =
             match rawArgBindings with
             | Some bindings -> true, bindings
@@ -454,7 +484,7 @@ module rec Internal =
         | All | OnlyTrue ->
             let ruleArgs =
                 ruleArgs
-                |> Array.map(function
+                |> List.map(function
                     | Variable name as var ->
                         argBindings
                         |> Map.tryFind name
@@ -495,7 +525,7 @@ module rec Internal =
                 |> List.map (fun bindingGroup ->
                     // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to to the outer scope.
                     argPairs
-                    |> Array.choose (fun (ruleArg, outerArg) ->
+                    |> List.choose (fun (ruleArg, outerArg) ->
                         match outerArg, ruleArg with
                         | Variable name, Variable innerName ->
                             bindingGroup |> Map.tryFind innerName
@@ -503,7 +533,7 @@ module rec Internal =
                         | Variable name, _ -> Some (name, ruleArg)
                         | _ -> None
                     )
-                    |> Map.ofArray
+                    |> Map.ofList
                 )
                 |> List.filter (Map.isEmpty >> not)
                 |> Some
@@ -527,8 +557,8 @@ module rec Internal =
         match trace with
         | All ->
             match goal with
-            | SimpleGoal ("true", [||]) -> ()
-            | SimpleGoal ("false", [||]) -> ()
+            | SimpleGoal ("true", []) -> ()
+            | SimpleGoal ("false", []) -> ()
             | _ ->
                 let printGoal = substituteVarsInGoal scope goal
                 print depth (Goal.toString printGoal)
@@ -540,12 +570,25 @@ module rec Internal =
             None
         else
             match goal with
-            | SimpleGoal ("true", [||]) -> Some []
-            | SimpleGoal ("false", [||]) -> None
+            | SimpleGoal ("true", []) -> Some []
+            | SimpleGoal ("false", []) -> None
 
             | SimpleGoal (functor, args) ->
                 let key = (functor, args.Length)
                 let predicates = Scope.lookupPredicates key scope
+                
+                evalArgs {
+                    depth = depth + 1
+                    trace = trace
+                    scope = scope
+                    
+                    seenGoals = seenGoals |> Set.add expandedGoal
+                    seenExpressions = seenExpressions
+                    stack = (GoalFrame goal) :: stack 
+                } args
+                |> ignore
+                
+                ()
                 
                 let success, bindings =
                     predicates
