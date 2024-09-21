@@ -198,8 +198,10 @@ let isOp (context: Context) (args: Expression list) =
             trace = context.trace
             
             scope = context.scope
-            
             expression = right
+            
+            seenGoals = context.seenGoals 
+            seenFunctions = context.seenFunctions
             stack = (NativePredicate "is" :: context.stack) 
         }
         

@@ -43,7 +43,7 @@ let main args =
         elif isQuery then
             match Parser.parseGoal code with
             | Ok goal ->
-                let trace = if shouldTrace then All else NoTrace
+                let trace = if shouldTrace then RuleOnly else NoTrace
                 
                 try
                     match Interpreter.query goal scope trace with

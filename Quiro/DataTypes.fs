@@ -56,13 +56,16 @@ type StackFrame =
     | NativePredicate of string
     | NativeFunction of string
 
-type Trace = All | OnlyTrue | NoTrace
+type Trace = All | RuleOnly | OnlyTrue | NoTrace
 
 type Context = {
     depth: int
     trace: Trace
     
     stack: StackFrame list
+    
+    seenGoals: Set<string * Expression list>
+    seenFunctions: Set<string * Expression list>
     scope: Scope
 }
 and Scope = {
