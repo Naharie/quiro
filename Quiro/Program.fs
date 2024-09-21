@@ -25,7 +25,8 @@ let main args =
             else
                 false, false, raw
 
-        if code.StartsWith ".load " then
+        if String.IsNullOrWhiteSpace code then ()
+        elif code.StartsWith ".load " then
             let path = code[6..].Trim('\'', '"')
             
             try

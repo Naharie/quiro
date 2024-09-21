@@ -644,22 +644,6 @@ module rec Internal =
                         stack = (GoalFrame expandedGoal) :: stack
                     }
 
-(*
-human(socrates).
-mortal(X) :- human(X).
-
-mother_child(trude, sally).
-father_child(tom, sally).
-father_child(tom, erica).
-father_child(mike, tom).
-sibling(X, Y)      :- parent_child(Z, X), parent_child(Z, Y).
-parent_child(X, Y) :- father_child(X, Y).
-parent_child(X, Y) :- mother_child(X, Y).
-
-ancestor(X, Y) :- parent_child(X, Y).
-ancestor(X, Y) :- parent_child(X, Z), ancestor(Z, Y).
-*)
-
 /// Query whether a given goal is true or false.
 let rec query (goal: Goal) (scope: Scope) (trace: Trace): Map<string, Expression> list option =
     Internal.tryProveGoal {
