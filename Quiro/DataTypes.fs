@@ -62,11 +62,7 @@ type Context = {
     depth: int
     trace: Trace
     
-    seenGoals: Set<Goal>
-    seenExpressions: Set<Expression>
-    
     stack: StackFrame list
-    
     scope: Scope
 }
 and Scope = {

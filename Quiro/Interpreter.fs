@@ -41,10 +41,7 @@ module rec Internal =
         
         goal: Goal
         
-        scope: Scope
-        
-        seenGoals: Set<Goal>
-        seenExpressions: Set<Expression>
+        scope: Scope    
         stack: StackFrame list
     }
     type private RuleContext = {
@@ -54,10 +51,7 @@ module rec Internal =
         currentGoal: string * Expression list
         predicate: Predicate
         
-        scope: Scope
-        
-        seenGoals: Set<Goal>
-        seenExpressions: Set<Expression>
+        scope: Scope    
         stack: StackFrame list
     }
 
@@ -68,9 +62,6 @@ module rec Internal =
         expression: Expression
         
         scope: Scope
-        
-        seenGoals: Set<Goal>
-        seenExpressions: Set<Expression>
         stack: StackFrame list
     }
     type private FunctionContext = {
@@ -81,9 +72,6 @@ module rec Internal =
         func: Function
         
         scope: Scope
-        
-        seenGoals: Set<Goal>
-        seenExpressions: Set<Expression>
         stack: StackFrame list
     }
 
@@ -187,8 +175,6 @@ module rec Internal =
                 expression = arg
                 scope = context.scope
                 
-                seenGoals = context.seenGoals
-                seenExpressions = context.seenExpressions
                 stack = (NativeFunction "," :: context.stack)
             }
             
@@ -214,8 +200,6 @@ module rec Internal =
             func = func
             scope = scope
             
-            seenGoals = seenGoals
-            seenExpressions = seenExpressions
             stack = stack
         } = args
         
@@ -274,8 +258,6 @@ module rec Internal =
 
                 scope = subScope
                 
-                seenGoals = seenGoals
-                seenExpressions = seenExpressions
                 stack = (FunctionFrame func) :: stack 
             }
             |> Some
@@ -290,8 +272,6 @@ module rec Internal =
             
             scope = scope
             
-            seenGoals = seenGoals
-            seenExpressions = seenExpressions
             stack = stack
         } = args
         match trace with
@@ -312,8 +292,6 @@ module rec Internal =
                     trace = trace
                     expression = head
                     scope = scope
-                    seenGoals = seenGoals
-                    seenExpressions = seenExpressions
                     stack = (ExpressionFrame expr) :: stack 
                 }
 
@@ -329,8 +307,6 @@ module rec Internal =
                                 parent = Some scope
                                 values = Map.empty 
                         }
-                        seenGoals = seenGoals
-                        seenExpressions = seenExpressions
                         stack = (ExpressionFrame expr) :: stack 
                     }
                 
@@ -352,8 +328,6 @@ module rec Internal =
                 goal = goal
                 scope = scope
                 
-                seenGoals = seenGoals
-                seenExpressions = seenExpressions 
                 stack = (ExpressionFrame expr) :: stack
             } with
             | Some bindings ->
@@ -377,8 +351,6 @@ module rec Internal =
                 trace = trace
                 scope = scope
                 
-                seenExpressions = seenExpressions |> Set.add expr 
-                seenGoals = seenGoals
                 stack = (ExpressionFrame expr) :: stack
             } args
             |> List.map (fun args ->
@@ -393,9 +365,7 @@ module rec Internal =
                             func = userFunction
                             currentExpr = functor, args 
                             scope = scope
-                            
-                            seenGoals = seenGoals
-                            seenExpressions = seenExpressions |> Set.add expr 
+                             
                             stack = (ExpressionFrame expr) :: stack 
                         }
                         
@@ -407,9 +377,6 @@ module rec Internal =
                         let context: Context = {
                             depth = depth + 1
                             trace = trace
-                            
-                            seenGoals = seenGoals
-                            seenExpressions = seenExpressions
                             
                             stack = (ExpressionFrame expr) :: stack
                             scope = scope
@@ -455,8 +422,6 @@ module rec Internal =
             
             predicate = Predicate(ruleFunctor, ruleArgs, ruleGoal)
             
-            seenGoals = seenGoals
-            seenExpressions = seenExpressions
             stack = stack
         } = args
         
@@ -523,8 +488,6 @@ module rec Internal =
 
                 scope = subScope
                 
-                seenGoals = seenGoals
-                seenExpressions = seenExpressions
                 stack = (GoalFrame ruleGoal) :: stack 
             } with
             | Some newBindings ->
@@ -547,7 +510,6 @@ module rec Internal =
                     )
                     |> Map.ofList
                 )
-                |> List.filter (Map.isEmpty >> not)
                 |> Some
             | None -> None
         else
@@ -561,8 +523,6 @@ module rec Internal =
             
             scope = scope
             
-            seenGoals = seenGoals
-            seenExpressions = seenExpressions
             stack = stack
         } = args
 
@@ -578,183 +538,162 @@ module rec Internal =
         
         let expandedGoal = substituteVarsInGoal scope goal
         
-        if seenGoals |> Set.contains expandedGoal then
-            None
-        else
-            match goal with
-            | SimpleGoal ("true", []) -> Some []
-            | SimpleGoal ("false", []) -> None
+        match goal with
+        | SimpleGoal ("true", []) -> Some [ Map.empty ]
+        | SimpleGoal ("false", []) -> None
 
-            | SimpleGoal (functor, args) ->
-                let key = (functor, args.Length)
-                let predicates = Scope.lookupPredicates key scope
-                
-                evalArgs {
-                    depth = depth + 1
-                    trace = trace
-                    scope = scope
-                    
-                    seenGoals = seenGoals |> Set.add expandedGoal
-                    seenExpressions = seenExpressions
-                    stack = (GoalFrame goal) :: stack 
-                } args
-                |> List.choose (fun args ->
-                    let success, bindings =
-                        predicates
-                        |> Array.fold (fun (success, existingBindings) predicate ->
-                            match predicate with
-                            | Choice1Of2 userPredicate ->
-                                let ruleArgs = {
-                                    depth = depth + 1
-                                    trace = trace
-                                    
-                                    currentGoal = (functor, args)
-                                    scope = scope
-                                    
-                                    predicate = userPredicate
-                                    
-                                    seenGoals = seenGoals |> Set.add expandedGoal
-                                    seenExpressions = seenExpressions 
-                                    stack = (GoalFrame expandedGoal) :: stack 
-                                }
-
-                                match testRule ruleArgs with
-                                | Some newBindings ->
-                                    (true, List.append newBindings existingBindings)
-                                | None ->
-                                    (success, existingBindings)
-                                
-                            | Choice2Of2 nativePredicate ->
-                                let context: Context = {
-                                    depth = depth + 1
-                                    trace = trace
-                                    
-                                    seenGoals = seenGoals
-                                    seenExpressions = seenExpressions
-                                    
-                                    stack = (GoalFrame goal) :: stack
-                                    scope = scope
-                                }
-
-                                try
-                                    match nativePredicate context args with
-                                    | Some bindings ->
-                                        (true, List.append bindings existingBindings)
-                                    | None ->
-                                        (success, existingBindings)
-                                with
-                                | :? PrologException -> reraise()
-                                | error ->
-                                    raise (PrologException(error.Message, stack, error))
-                        ) (false, [])
-                    
-                    if success then Some bindings else None
-                )
-                |> List.collect id
-                |> List.noneOnEmpty
-            | DynamicGoal (var, goalArgs) ->
-                match Scope.lookupValue var scope with
-                | Some (Atom name) ->
-                    tryProveGoal { args with depth = depth + 1; goal = SimpleGoal(name, goalArgs) }
-                   
-                | Some _ ->
-                    let message = "Can't perform a dynamic predicate invocation against a variable bound to something other than an atom!"
-                    raise (PrologException(message, stack, InvalidOperationException(message)))
-                    
-                | None ->
-                    raise (UnboundVariableException(var, stack))
+        | SimpleGoal (functor, args) ->
+            let key = (functor, args.Length)
+            let predicates = Scope.lookupPredicates key scope
             
-            | NegatedGoal subGoal ->
-                let provability = tryProveGoal {
-                    depth = depth + 1
-                    trace = trace
-                    
-                    goal = subGoal
-                    scope = scope
-                    
-                    seenGoals = seenGoals |> Set.add expandedGoal
-                    seenExpressions = seenExpressions
-                    stack = (GoalFrame goal) :: stack
-                }
+            evalArgs {
+                depth = depth + 1
+                trace = trace
+                scope = scope
                 
-                Option.invert [] provability
-            
-            | ConjunctionGoal (a, b) ->
-                let provabilityA = tryProveGoal {
-                    depth = depth + 1
-                    trace = trace
-                    
-                    goal = a
-                    scope = scope
-                    
-                    seenGoals = seenGoals |> Set.add expandedGoal
-                    seenExpressions = seenExpressions
-                    stack = (GoalFrame goal) :: stack
-                }
-                
-                match provabilityA with
-                | Some bindingsA ->
-                    let results = [
-                        let bindingsA =
-                            match bindingsA with
-                            | [] -> [ Map.empty ]
-                            | _ -> bindingsA
-                        
-                        for bindingSetA in bindingsA do
-                            let provabilityB = tryProveGoal {
+                stack = (GoalFrame goal) :: stack 
+            } args
+            |> List.choose (fun args ->
+                let success, bindings =
+                    predicates
+                    |> Array.fold (fun (success, existingBindings) predicate ->
+                        match predicate with
+                        | Choice1Of2 userPredicate ->
+                            let ruleArgs = {
                                 depth = depth + 1
                                 trace = trace
                                 
-                                goal = b
-                                scope = { emptyScope with parent = Some scope; values = bindingSetA; }
+                                currentGoal = (functor, args)
+                                scope = scope
                                 
-                                seenGoals = seenGoals |> Set.add expandedGoal
-                                seenExpressions = seenExpressions
-                                stack = (GoalFrame expandedGoal) :: stack
+                                predicate = userPredicate
+                                
+                                stack = (GoalFrame expandedGoal) :: stack 
                             }
-                            
-                            match provabilityB with
-                            | Some bindingsB ->
-                                yield bindingsB |> List.map (Map.merge bindingSetA)
-                            | None -> ()
-                    ]
-                    
-                    match results with
-                    | [] -> None
-                    | _ ->
-                        results
-                        |> List.collect id
-                        |> Some
-                | None ->
-                    None
 
-            | DisjunctionGoal (a, b) ->
-                let provability = tryProveGoal {
+                            match testRule ruleArgs with
+                            | Some newBindings ->
+                                (true, List.append newBindings existingBindings)
+                            | None ->
+                                (success, existingBindings)
+                            
+                        | Choice2Of2 nativePredicate ->
+                            let context: Context = {
+                                depth = depth + 1
+                                trace = trace
+                                
+                                stack = (GoalFrame goal) :: stack
+                                scope = scope
+                            }
+
+                            try
+                                match nativePredicate context args with
+                                | Some bindings ->
+                                    (true, List.append bindings existingBindings)
+                                | None ->
+                                    (success, existingBindings)
+                            with
+                            | :? PrologException -> reraise()
+                            | error ->
+                                raise (PrologException(error.Message, stack, error))
+                    ) (false, [])
+                
+                if success then Some bindings else None
+            )
+            |> List.collect id
+            |> List.noneOnEmpty
+        | DynamicGoal (var, goalArgs) ->
+            match Scope.lookupValue var scope with
+            | Some (Atom name) ->
+                tryProveGoal { args with depth = depth + 1; goal = SimpleGoal(name, goalArgs) }
+               
+            | Some _ ->
+                let message = "Can't perform a dynamic predicate invocation against a variable bound to something other than an atom!"
+                raise (PrologException(message, stack, InvalidOperationException(message)))
+                
+            | None ->
+                raise (UnboundVariableException(var, stack))
+        
+        | NegatedGoal subGoal ->
+            let provability = tryProveGoal {
+                depth = depth + 1
+                trace = trace
+                
+                goal = subGoal
+                scope = scope
+                
+                stack = (GoalFrame goal) :: stack
+            }
+            
+            Option.invert [] provability
+        
+        | ConjunctionGoal (a, b) ->
+            let provabilityA = tryProveGoal {
+                depth = depth + 1
+                trace = trace
+                
+                goal = a
+                scope = scope
+                
+                stack = (GoalFrame goal) :: stack
+            }
+            
+            match provabilityA with
+            | Some bindingsA ->
+                let results = [
+                    let bindingsA =
+                        match bindingsA with
+                        | [] -> [ Map.empty ]
+                        | _ -> bindingsA
+                    
+                    for bindingSetA in bindingsA do
+                        let provabilityB = tryProveGoal {
+                            depth = depth + 1
+                            trace = trace
+                            
+                            goal = b
+                            scope = { emptyScope with parent = Some scope; values = bindingSetA; }
+                            stack = (GoalFrame expandedGoal) :: stack
+                        }
+                        
+                        match provabilityB with
+                        | Some bindingsB ->
+                            yield bindingsB |> List.map (Map.merge bindingSetA)
+                        | None -> ()
+                ]
+                
+                match results with
+                | [] -> None
+                | _ ->
+                    results
+                    |> List.collect id
+                    |> Some
+            | None ->
+                None
+
+        | DisjunctionGoal (a, b) ->
+            let provability = tryProveGoal {
+                depth = depth + 1
+                trace = trace
+                
+                goal = a
+                scope = scope
+
+                stack = (GoalFrame expandedGoal) :: stack
+            }
+            
+            match provability with
+            | Some _ -> provability
+            | None ->
+                tryProveGoal {
                     depth = depth + 1
                     trace = trace
                     
-                    goal = a
+                    goal = b
                     scope = scope
                     
-                    seenGoals = seenGoals |> Set.add goal
-                    seenExpressions = seenExpressions
                     stack = (GoalFrame expandedGoal) :: stack
                 }
-                
-                match provability with
-                | Some _ -> provability
-                | None ->
-                    tryProveGoal {
-                        depth = depth + 1
-                        trace = trace
-                        
-                        goal = b
-                        scope = scope
-                        
-                        seenGoals = seenGoals |> Set.add goal
-                        seenExpressions = seenExpressions
-                        stack = (GoalFrame expandedGoal) :: stack
-                    }
 
 /// Query whether a given goal is true or false.
 let rec query (goal: Goal) (scope: Scope) (trace: Trace): Map<string, Expression> list option =
@@ -763,8 +702,6 @@ let rec query (goal: Goal) (scope: Scope) (trace: Trace): Map<string, Expression
         trace = trace
         goal = goal
         scope = scope
-        
-        seenGoals = Set.empty
-        seenExpressions = Set.empty 
+         
         stack = [] 
     }
