@@ -1,3 +1,4 @@
+[<CompilationRepresentation (CompilationRepresentationFlags.ModuleSuffix)>]
 module rec Quiro.DataTypes
 
 open System
@@ -6,11 +7,10 @@ open Microsoft.FSharp.Core
 open Quiro.DataTypes
 
 type Expression =
-    | Atom of atom:string
-    
+    | Atom of atom:string  
     | Number of Number
-    
     | ListTerm of list:Expression list
+    
     | FunctionCall of target:string * args:Expression[]
     | Variable of name:string
     | ListCons of head:Expression * tail:Expression

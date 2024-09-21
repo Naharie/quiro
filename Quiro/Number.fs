@@ -93,9 +93,49 @@ with
                 BigDecimal.Pow(a, b, BigDecimal.Precision)
         ) _.Pow a b
         
-    static member (<) (a, b) =
+    static member op_LessThan (a, b) =
         match a, b with
         | Float a, Float b -> a < b
+        
+        | Float _, Infinity p -> p
+        | Infinity p, Float _ -> not p
+        
+        | Range _, _ | _, Range _ ->
+            invalidOp "Ranges may not have relative comparison applied"
+        
+        | Infinity false, Infinity false -> false
+        | Infinity false, _ -> true
+        
+        | Infinity true, _ -> false
+        
+        | _, Infinity false -> false
+        | _, Infinity true -> true
+        
+        | NaN, _ | _, NaN ->
+            invalidOp "Can't compare NaN to another value that way"
+    static member op_LessThanOrEqual (a, b) = a = b || a < b
+    
+    static member op_GreaterThan (a, b) =
+        match a, b with
+        | Float a, Float b -> a > b
+        
+        | Float _, Infinity p -> not p
+        | Infinity p, Float _ -> p
+        
+        | Range _, _ | _, Range _ ->
+            invalidOp "Ranges may not have relative comparison applied"
+        
+        | Infinity false, _ -> false
+        
+        | Infinity true, Infinity true -> false
+        | Infinity true, _ -> true
+        
+        | _, Infinity false -> true
+        | _, Infinity true -> false
+        
+        | NaN, _ | _, NaN ->
+            invalidOp "Can't compare NaN to another value that way!"
+    static member op_GreaterThanOrEqual (a, b) = a = b || a > b
         
     override this.ToString() =
         match this with

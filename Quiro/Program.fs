@@ -45,7 +45,7 @@ let main args =
             match Parser.parseGoal code with
             | Ok goal ->
                 let trace = if shouldTrace then All else NoTrace
-                
+
                 try
                     match Interpreter.query goal scope trace with
                     | Some bindings ->
