@@ -31,7 +31,10 @@ let atomExpr, atomParser =
     let letter = satisfy Char.IsLower
     
     let headChar = letter
-    let symbols = satisfy (fun char -> Char.IsSymbol char && invalidAtomSymbols |> Set.contains char |> not)
+    
+    let isSymbol char =
+        Char.IsSymbol char || Char.IsPunctuation char
+    let symbols = satisfy (fun char -> isSymbol char && (invalidAtomSymbols |> Set.contains char |> not))
     let bodyChar = letter <|> symbols <|> digit
     
     let unescapedChar = noneOf [ '\\'; '\'' ]
@@ -47,29 +50,21 @@ let atomExpr, atomParser =
         
         unwrappedAtom <|> wrappedAtom
         
-    let atomTerm: _ Parser = atomParser |>> Atom
+    let atomTerm: _ Parser = atomParser |>> Atom <?> "atom"
         
     (atomTerm, atomParser)
-let integerExpr: _ Parser =
-    let options =
-        NumberLiteralOptions.AllowMinusSign
-        ||| NumberLiteralOptions.DefaultInteger
-    
-    numberLiteral options "integer"
-    |>> fun literal ->
-        bigint.Parse literal.String
-        |> Integer
-let floatExpr: _ Parser =
+let numberExpr: _ Parser =
     let options =
         NumberLiteralOptions.AllowMinusSign
         ||| NumberLiteralOptions.AllowFraction
         ||| NumberLiteralOptions.AllowExponent
         ||| NumberLiteralOptions.DefaultFloat
     
-    numberLiteral options "decimal"
+    numberLiteral options "number"
     |>> fun literal ->
         BigDecimal.Parse literal.String
         |> Float
+        |> Number
 
 let textExpr: _ Parser =
     let quote = skipChar '"'
@@ -77,13 +72,15 @@ let textExpr: _ Parser =
     let escapedChar = skipChar '\\' >>. anyOf [ '\\'; '"' ]
     
     between quote quote (manyChars (unescapedChar <|> escapedChar))
+    <?> "string"
     |>> fun text ->
         text.ToCharArray()
-        |> Array.map (bigint >> Integer)
+        |> Array.map (int >> BigDecimal >> Float >> Number)
         |> Array.toList
         |> ListTerm
 
-let expression, expressionRef = createParserForwardedToRef() : Parser<Expression> * Parser<Expression> ref
+let expressionNoComma, expressionNoCommaRef = createParserForwardedToRef() : Parser<Expression> * Parser<Expression> ref
+let expressionWithComma, expressionWithCommaRef = createParserForwardedToRef() : Parser<Expression> * Parser<Expression> ref
 
 let variableExpr, variableParser =
     let symbols = anyOf [ '_'; '~'; '`'; '!'; '@'; '#'; ]
@@ -93,7 +90,7 @@ let variableExpr, variableParser =
     let variableParser: _ Parser =
         headChar .>>. manyChars bodyChar
         |>> fun (head, body) -> (string head) + body
-    let variableExpression = variableParser |>> Variable
+    let variableExpression = variableParser |>> Variable <?> "variable"
     
     variableExpression, variableParser
 
@@ -102,22 +99,22 @@ let listExpression: _ Parser =
     let endList = skipChar ']'
     let separator = skipChar ','
     
-    between startList endList (sepBy expression separator)
+    between startList endList (sepBy expressionNoComma separator)
     |>> ListTerm
+    <?> "list"
 
 let listConsExpr: _ Parser =
-    skipChar '[' >>. ws >>. expression .>> ws .>> skipChar '|' .>> ws .>>. expression .>> ws .>> skipChar ']'
+    skipChar '[' >>. ws >>. expressionNoComma .>> ws .>> skipChar '|' .>> ws .>>. expressionNoComma .>> ws .>> skipChar ']'
     |>> ListCons
+    <?> "list cons"
 
-let compoundParser =
+let compoundParser: _ Parser =
     let startArgs = skipChar '('
     let endArgs = skipChar ')'
     let separator = skipChar ','
     
-    let argsParser = between startArgs endArgs (sepBy expression separator)
-    let compoundParser: _ Parser = atomParser .>>. opt argsParser
-        
-    compoundParser
+    let argsParser = between startArgs endArgs (sepBy expressionNoComma separator)
+    atomParser .>>. opt argsParser
 let functionCallOrAtomExpression: _ Parser =
     compoundParser
     |>> fun (functor, args) ->
@@ -129,42 +126,50 @@ let functionCallOrAtomExpression: _ Parser =
 
 let goal, goalRef = createParserForwardedToRef() : Parser<Goal> * Parser<Goal> ref
 
-let parenExpr = skipChar '(' >>. ws >>. expression .>> ws .>> skipChar ')'
+let parenExpr = skipChar '(' >>. ws >>. expressionWithComma .>> ws .>> skipChar ')'
 let goalExpr = skipChar '{' >>. ws >>. goal .>> ws .>> skipChar '}' |>> GoalExpr
 
-let operatorExpression = OperatorPrecedenceParser<Expression, unit, unit>()
+let operatorCommaExpression = OperatorPrecedenceParser<Expression, unit, unit>()
+let operatorNoCommaExpression = OperatorPrecedenceParser<Expression, unit, unit>()
 
-let private op name precedence =
-    operatorExpression.AddOperator(InfixOperator(name, ws, precedence, Associativity.Left, fun a b -> FunctionCall(name, [| a; b |])))
+let private addExpressionOperators (doComma: bool) (operatorExpression: OperatorPrecedenceParser<Expression, unit, unit>) =
+    let op name precedence =
+        operatorExpression.AddOperator(InfixOperator(name, ws, precedence, Associativity.Left, fun a b -> FunctionCall(name, [| a; b |])))
 
-op "," 600
+    if doComma then op "," 100
 
-op "+" 500
-op "-" 500
+    op "+" 200
+    op "-" 200
 
-op "*" 400
-op "/" 400
-op "div" 400
-op "mod" 400
-op "rem" 400
+    op "*" 300
+    op "/" 300
+    op "div" 300
+    op "mod" 300
+    op "rem" 300
 
-op "**" 200
-op "^" 200
+    op "**" 400
+    op "^" 400
 
-operatorExpression.TermParser <- ws >>. choice [
+operatorCommaExpression.TermParser <- ws >>. choice [
     functionCallOrAtomExpression
-    integerExpr
-    floatExpr
+    variableExpr
+    numberExpr
     textExpr
-    listExpression
+    (attempt listConsExpr <|> listExpression)
     parenExpr
 ] .>> ws
-expressionRef.Value <- operatorExpression.ExpressionParser
+operatorNoCommaExpression.TermParser <- operatorCommaExpression.TermParser
+
+addExpressionOperators true operatorCommaExpression
+addExpressionOperators false operatorNoCommaExpression
+
+expressionNoCommaRef.Value <- operatorNoCommaExpression.ExpressionParser
+expressionWithCommaRef.Value <- operatorCommaExpression.ExpressionParser
 
 // Goals
 
-let simpleGoal: _ Parser =
-   expression .>>. opt (choice [
+let comparisonGoal: _ Parser =
+    expressionNoComma .>>. choice [
         pstring "<"
         pstring "<="
         pstring ">"
@@ -172,29 +177,27 @@ let simpleGoal: _ Parser =
         pstring "="
         pstring "=:="
         pstring "is"
-    ] .>>. expression)
-    |>> fun (exprA, maybeOp) ->
-        match maybeOp with
-        | Some (op, exprB) ->
-            SimpleGoal(op, [| exprA; exprB |])
-        | None ->
-            match exprA with
-            | FunctionCall(functor, args) -> SimpleGoal(functor, args)
-            | _ -> failwithf "Unexpected expression in goal position when not used as an argument for a goal level operator!"
+    ] .>>. expressionNoComma
+    |>> fun ((exprA, op), exprB) ->
+        SimpleGoal(op, [| exprA; exprB |])
+let simpleGoal: _ Parser =
+    compoundParser
+    |>> fun (functor, args) ->
+        SimpleGoal(functor, args |> Option.defaultValue List.empty |> List.toArray)
 
 let junctionGoal = OperatorPrecedenceParser<Goal, unit, unit>()
 
-junctionGoal.AddOperator(InfixOperator(",", ws, 1000, Associativity.Left, fun a b -> ConjunctionGoal(a, b)))
-junctionGoal.AddOperator(InfixOperator(";", ws, 1100, Associativity.Left, fun a b -> DisjunctionGoal(a, b)))
+junctionGoal.AddOperator(InfixOperator(",", ws, 1100, Associativity.Left, fun a b -> ConjunctionGoal(a, b)))
+junctionGoal.AddOperator(InfixOperator(";", ws, 1000, Associativity.Left, fun a b -> DisjunctionGoal(a, b)))
 
-junctionGoal.TermParser <- simpleGoal
+junctionGoal.TermParser <- (attempt comparisonGoal <|> simpleGoal)
 
 goalRef.Value <- junctionGoal.ExpressionParser
 
 let declaration: _ Parser =
     compoundParser .>> ws .>>. opt (choice [
         skipString ":-" >>. ws >>. goal |>> Choice1Of2
-        skipString "-->" >>. ws >>. expression |>> Choice2Of2
+        skipString "-->" >>. ws >>. expressionWithComma |>> Choice2Of2
     ]) .>> ws .>> skipChar '.'
     |>> fun ((functor, args), body) ->
         let args =
@@ -211,35 +214,6 @@ let declaration: _ Parser =
                  FunctionDeclaration(Function(functor, args, expression))
         | None ->
             PredicateDeclaration (Predicate (functor, args, SimpleGoal ("true", Array.empty)))
-
-// Declarations
-
-(*
-partition([], _, [], []).
-partition([X|Xs], Pivot, Smalls, Bigs) :-
-    (   X @< Pivot ->
-        Smalls = [X|Rest],
-        partition(Xs, Pivot, Rest, Bigs)
-    ;   Bigs = [X|Rest],
-        partition(Xs, Pivot, Smalls, Rest)
-    ).
-
-quicksort([])     --> [].
-quicksort([X|Xs]) -->
-    { partition(Xs, X, Smaller, Bigger) },
-    quicksort(Smaller), [X], quicksort(Bigger).
-*)
-
-// Support destructuring lists in a predicate's definition.
-
-(*
-maplist(_, [], []).
-maplist(P, [X|Xs], [Y|Ys]) :-
-   call(P, X, Y),
-   maplist(P, Xs, Ys).
-*)
-
-// Scripts
 
 let comment: _ Parser = (ws) >>. skipChar '%' >>. manyChars (noneOf [ '\r'; '\t' ]) .>> ws
 
@@ -259,7 +233,7 @@ let script: _ Parser =
 // Parse functions
 
 let parseExpression text =
-    match run expression text with
+    match run expressionNoComma text with
     | Success(result, _, _) -> Result.Ok result
     | Failure(message, _, _) -> Result.Error message
 

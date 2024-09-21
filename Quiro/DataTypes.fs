@@ -1,14 +1,15 @@
 module rec Quiro.DataTypes
 
 open System
-open ExtendedNumerics
+open System.Diagnostics
 open Microsoft.FSharp.Core
+open Quiro.DataTypes
 
 type Expression =
     | Atom of atom:string
-    | BooleanExpr of bool
-    | Integer of int:bigint
-    | Float of float:BigDecimal
+    
+    | Number of Number
+    
     | ListTerm of list:Expression list
     | FunctionCall of target:string * args:Expression[]
     | Variable of name:string
@@ -28,13 +29,28 @@ type Declaration =
     | PredicateDeclaration of predicate:Predicate
     | FunctionDeclaration of ``function``:Function
 
-[<Struct>]
-type PrologError =
-    | InsufficientSubstantiation of term:string * stack:StackFrame list
+// Using exceptions may seem antithetical to functional programming and the style of F#,
+// but sometimes it is the best option as it allows errors to bubble up from places that
+// are constrained by the type system, such as the number type above.
+type PrologException(message: string, stack: StackFrame list, inner: Exception) =
+    inherit Exception(message, inner)
+    new(message: string, stack: StackFrame list) = PrologException(message, stack, null)
+
+    override _.ToString() =
+        message + "\r\n" + StackFrame.toString stack
+
+type InsufficientSubstantiationException (term: string, stack: StackFrame list) =
+    inherit PrologException($"The term %s{term} was not sufficiently substantiated", stack)
+
+type UnboundVariableException (variable: string, stack: StackFrame list) =
+    inherit PrologException($"The variable %s{variable} was not bound in the current scope", stack)
 
 type StackFrame =
     | GoalFrame of Goal
     | ExpressionFrame of Expression
+    | FunctionFrame of Function
+    | NativePredicate of string
+    | NativeFunction of string
 
 type Trace = All | OnlyTrue | NoTrace
 
@@ -55,10 +71,10 @@ and Scope = {
     values: Map<string, Expression>
     
     predicates: Map<(string * int), Predicate list>
-    nativePredicates: Map<string * int, (Context -> Expression[] -> Result<Map<string, Expression> list option, PrologError>) list>
+    nativePredicates: Map<string * int, (Context -> Expression[] -> Map<string, Expression> list option) list>
     
     functions: Map<(string * int), Function list>
-    nativeFunctions: Map<string * int, (Context -> Expression[] -> Result<Expression option, PrologError>) list>
+    nativeFunctions: Map<string * int, (Context -> Expression[] -> Expression list option) list>
 }
 
 // Helper Values
@@ -140,10 +156,7 @@ module Expression =
         match term with
         | Atom name -> name
         | Variable name -> name
-        | Integer value -> string value
-        | BooleanExpr value ->
-            if value then "true" else "false"
-        | Float value -> string value
+        | Number value -> string value
         | ListTerm values ->
             values
             |> List.map toString
@@ -174,20 +187,23 @@ module Goal =
         | DisjunctionGoal(a, b) -> $"%s{toString a}; %s{toString b}"
       
 module StackFrame =
-    let displayStack (stack: StackFrame list) =
-        for frame in stack do
+    let toString (stack: StackFrame list) =
+        [
+            for frame in stack do
             match frame with
             | GoalFrame goal ->
-                printfn $"\tat goal %s{Goal.toString goal}"
-            | ExpressionFrame expression ->
-                printfn $"\tat expression %s{Expression.toString expression}"
+                $"\tat goal %s{Goal.toString goal}"
+            | ExpressionFrame expr ->
+                $"\tat expression %s{Expression.toString expr}"
+            | FunctionFrame func ->
+                $"\tat function %s{Function.toString func}"
                 
-module PrologError =
-    let displayError error =
-        match error with
-        | InsufficientSubstantiation (term, stack) ->
-            printfn $"The term %s{term} was not sufficiently substantiated"
-            StackFrame.displayStack stack
+            | NativeFunction name ->
+                $"\tat native function %s{name}"
+            | NativePredicate name ->
+                $"\tat native predicate %s{name}"
+        ]
+        |> String.concat "\r\n"
 
 module Predicate =
     let toString predicate =

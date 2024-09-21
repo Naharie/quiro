@@ -9,6 +9,8 @@
     <ItemGroup>
         <Compile Include="Option.fs" />
         <Compile Include="Map.fs" />
+        <Compile Include="List.fs" />
+        <Compile Include="Number.fs" />
         <Compile Include="DataTypes.fs" />
         <Compile Include="Parser.fs" />
         <Compile Include="Interpreter.fs" />

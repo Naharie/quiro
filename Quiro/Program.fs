@@ -1,5 +1,6 @@
 ﻿open System
 open System.IO
+open System.Runtime.InteropServices.JavaScript
 open Quiro
 open Quiro.DataTypes
 
@@ -10,20 +11,19 @@ let main args =
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
     
-    // TODO: Temp
-    printfn $"%A{Parser.parseExpression (Console.ReadLine())}"
-    
     while true do
         printf "?- "
-        let isQuery, code =
+        let isQuery, shouldTrace, code =
             let raw = Console.ReadLine()
             
-            if raw.EndsWith "?" then
-                true, raw[0..^1]
+            if raw.EndsWith "??" then
+                true, true, raw[0..^2]
+            elif raw.EndsWith "?" then
+                true, false, raw[0..^1]
             elif not (raw.EndsWith ".") then
-                true, raw
+                true, false, raw
             else
-                false, raw
+                false, false, raw
 
         if code.StartsWith ".load " then
             let path = code[6..].Trim('\'', '"')
@@ -44,23 +44,27 @@ let main args =
         elif isQuery then
             match Parser.parseGoal code with
             | Ok goal ->
-                match Interpreter.query goal scope with
-                | Ok status ->
-                    match status with
+                let trace = if shouldTrace then All else NoTrace
+                
+                try
+                    match Interpreter.query goal scope trace with
                     | Some bindings ->
                         printfn "Yes"
-                        printfn ""
+                        
+                        if bindings.Length > 1 then
+                            printfn ""
 
                         for bindingGroup in bindings do
                             for KeyValue(variable, value) in bindingGroup do
                                 printfn $"%s{variable} = %s{Expression.toString value}"
 
-                            printfn ""  
+                            if bindingGroup.Count > 1 then
+                                printfn ""  
 
                     | None -> printfn "No\r\n"
-                    
-                | Error error ->
-                    PrologError.displayError error
+                with
+                | :? PrologException as error ->
+                    printfn $"%O{error}"
             | Error message ->
                 printfn $"%s{message}"
         else
