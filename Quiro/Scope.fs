@@ -57,15 +57,20 @@ let print = makePred (function
     
     | [ value ] ->
         match value with
-        | ListTerm values when values |> List.forall(function | Number (Float v) -> v.DecimalPlaces = 0 | _ -> false) ->
-            values
-            |> List.map (function
-                | Number (Float v) -> char v.WholeValue
-                | _ -> ' '
-            )
-            |> List.toArray
-            |> String
-            |> Console.WriteLine
+        | ListTerm values ->
+            let isText = values |> List.forall(function | Number (Float v) -> v.DecimalPlaces <= 0 | _ -> false)
+            
+            if isText then
+                values
+                |> List.map (function
+                    | Number (Float v) -> char v.WholeValue
+                    | _ -> ' '
+                )
+                |> List.toArray
+                |> String
+                |> Console.WriteLine
+            else
+                Console.WriteLine (Expression.toString value)
 
         | _ ->
             Console.WriteLine (Expression.toString value)
@@ -80,9 +85,8 @@ let nl _ _ =
     Some [ Map.empty ]
 
 let private one = Float BigDecimal.One
-
-let lessThan (context: Context) (args: Expression[]) =
-    let badUsage() = invalidOp "Can't use the < predicate on non numbers"
+let private mathCompPred name leftVar rightVar concrete (context: Context) (args: Expression[]) =
+    let badUsage() = invalidOp $"Can't use the %s{name} predicate on non numbers"
     
     match args with
     | [| Variable _; Variable _ |] -> raise (InsufficientSubstantiationException("<", context.stack))
@@ -102,21 +106,9 @@ let lessThan (context: Context) (args: Expression[]) =
             }
             
         b
-        |> List.collect (fun (b, bindings) ->
+        |> List.collect (fun (b, bindings) ->     
             match b with
-            | Number b ->
-                match b with
-                | Range(l, _) ->
-                    bindings
-                    |> Map.add a (Number (Range(Infinity false, l + one)))
-                    |> List.singleton
-                | _ ->
-                    b
-                    |> Seq.map (fun v ->
-                        bindings
-                        |> Map.add a (Number (Range(Infinity false, Float (v - BigDecimal.One))))
-                    )
-                    |> Seq.toList
+            | Number b -> leftVar a b bindings
             | _ -> badUsage()
         )
         |> Some
@@ -137,21 +129,7 @@ let lessThan (context: Context) (args: Expression[]) =
         a
         |> List.collect (fun (a, bindings) ->
             match a with
-            | Number a ->
-                match a with
-                | Range(_, h) ->
-                    bindings
-                    |> Map.add b  (Number (Range(h + one, Infinity true)))
-                    |> List.singleton
-
-                | _ ->
-                    a
-                    |> Seq.map (fun v ->
-                        bindings
-                        |> Map.add b (Number (Range(Float (v + BigDecimal 1), Infinity true)))
-                    )
-                    |> Seq.toList
-
+            | Number a -> rightVar a b bindings
             | _ -> badUsage()
         )
         |> Some
@@ -185,7 +163,7 @@ let lessThan (context: Context) (args: Expression[]) =
             
             b
             |> List.choose (fun (b, bindingsB) ->
-                if a < b then Some (Map.merge bindingsA bindingsB) else None
+                if concrete a b then Some (Map.merge bindingsA bindingsB) else None
             )
             |> List.noneOnEmpty
         )
@@ -193,9 +171,135 @@ let lessThan (context: Context) (args: Expression[]) =
         |> List.noneOnEmpty
     | _ -> None
 
-//let lessThanOrEqual = mathPred "<=" (<=)
-//let greaterThan = mathPred ">" (>)
-//let greaterThanOrEqual = mathPred ">=" (>=)
+let lessThan =
+        mathCompPred "<"
+            (fun a b bindings ->
+                match b with
+                | Range(l, _) ->
+                    bindings
+                    |> Map.add a (Number (Range(Infinity false, l + one)))
+                    |> List.singleton
+                | _ ->
+                    b
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add a (Number (Range(Infinity false, Float (v - BigDecimal.One))))
+                    )
+                    |> Seq.toList
+            )
+            (fun a b bindings ->
+                match a with
+                | Range(_, h) ->
+                    bindings
+                    |> Map.add b  (Number (Range(h + one, Infinity true)))
+                    |> List.singleton
+
+                | _ ->
+                    a
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add b (Number (Range(Float (v + BigDecimal.One), Infinity true)))
+                    )
+                    |> Seq.toList
+            )
+            (<)
+let lessThanOrEqual =
+        mathCompPred "<="
+            (fun a b bindings ->
+                match b with
+                | Range(l, _) ->
+                    bindings
+                    |> Map.add a (Number (Range(Infinity false, l)))
+                    |> List.singleton
+                | _ ->
+                    b
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add a (Number (Range(Infinity false, Float v)))
+                    )
+                    |> Seq.toList
+            )
+            (fun a b bindings ->
+                match a with
+                | Range(_, h) ->
+                    bindings
+                    |> Map.add b  (Number (Range(h, Infinity true)))
+                    |> List.singleton
+
+                | _ ->
+                    a
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add b (Number (Range(Float v, Infinity true)))
+                    )
+                    |> Seq.toList
+            )
+            (<=)
+
+let greaterThan =
+        mathCompPred ">"
+            (fun a b bindings ->
+                match b with
+                | Range(_, h) ->
+                    bindings
+                    |> Map.add a (Number (Range(Infinity false, h + one)))
+                    |> List.singleton
+                | _ ->
+                    b
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add a (Number (Range(Float (v + BigDecimal.One), Infinity true)))
+                    )
+                    |> Seq.toList
+            )
+            (fun a b bindings ->
+                match a with
+                | Range(_, h) ->
+                    bindings
+                    |> Map.add b  (Number (Range(Infinity false, h - one)))
+                    |> List.singleton
+
+                | _ ->
+                    a
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add b (Number (Range(Infinity false, Float (v - BigDecimal.One))))
+                    )
+                    |> Seq.toList
+            )
+            (>)
+let greaterThanOrEqual =
+        mathCompPred ">="
+            (fun a b bindings ->
+                match b with
+                | Range(_, h) ->
+                    bindings
+                    |> Map.add a (Number (Range(Infinity false, h)))
+                    |> List.singleton
+                | _ ->
+                    b
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add a (Number (Range(Float v, Infinity true)))
+                    )
+                    |> Seq.toList
+            )
+            (fun a b bindings ->
+                match a with
+                | Range(_, h) ->
+                    bindings
+                    |> Map.add b  (Number (Range(Infinity false, h)))
+                    |> List.singleton
+
+                | _ ->
+                    a
+                    |> Seq.map (fun v ->
+                        bindings
+                        |> Map.add b (Number (Range(Infinity false, Float v)))
+                    )
+                    |> Seq.toList
+            )
+            (>=)
 
 let exprEqual (_: Context) (args: Expression[]) =
     match args with
@@ -286,11 +390,11 @@ let defaultScope = {
    nativePredicates = Map.ofArray [|
        ("print", 1), [ print ]
        ("nl", 0), [ nl ]
-       
+
        ("<", 2), [ lessThan ]
-       //("<=", 2), [ lessThanOrEqual ]
-       //(">", 2), [ greaterThan ]
-       //(">=", 2), [ greaterThanOrEqual ]
+       ("<=", 2), [ lessThanOrEqual ]
+       (">", 2), [ greaterThan ]
+       (">=", 2), [ greaterThanOrEqual ]
        ("=", 2), [ exprEqual ]
        ("=:=", 2), [ valEqual ]
        ("is", 2), [ isOp ]

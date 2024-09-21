@@ -450,7 +450,12 @@ module rec Internal =
                 stack = (GoalFrame ruleGoal) :: stack 
             } with
             | Some newBindings ->
-                (Map.empty :: newBindings)
+                let newBindings =
+                    match newBindings with
+                    | [] -> [ Map.empty ]
+                    | _ -> newBindings
+                
+                newBindings
                 |> List.map (fun bindingGroup ->
                     // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to to the outer scope.
                     argPairs
@@ -588,7 +593,12 @@ module rec Internal =
                 match provabilityA with
                 | Some bindingsA ->
                     let results = [
-                        for bindingSetA in (Map.empty :: bindingsA) do
+                        let bindingsA =
+                            match bindingsA with
+                            | [] -> [ Map.empty ]
+                            | _ -> bindingsA
+                        
+                        for bindingSetA in bindingsA do
                             let provabilityB = tryProveGoal {
                                 depth = depth + 1
                                 trace = trace
