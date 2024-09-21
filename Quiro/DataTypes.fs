@@ -97,12 +97,7 @@ let emptyScope = {
 
 module Scope =
     let rec lookupValue (variable: string) (scope: Scope) =
-        match scope.values |> Map.tryFind variable with
-        | Some value -> Some value
-        | None ->
-            match scope.parent with
-            | Some parent -> lookupValue variable parent
-            | None -> None
+        scope.values |> Map.tryFind variable
     
     let lookupPredicates (key: string * int) (scope: Scope) =
         [|

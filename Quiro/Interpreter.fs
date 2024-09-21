@@ -500,16 +500,7 @@ module rec Internal =
         
         match trace with
         | All | RuleOnly | OnlyTrue ->
-            let ruleArgs =
-                ruleArgs
-                |> List.map(function
-                    | Variable name as var ->
-                        argBindings
-                        |> Map.tryFind name
-                        |> Option.defaultValue var
-                    | other -> other
-                )
-            let rule = Predicate(ruleFunctor, ruleArgs, substituteVarsInGoal subScope ruleGoal)
+            let rule = Predicate(ruleFunctor, outerArgs, substituteVarsInGoal subScope ruleGoal)
             
             match trace with
             | All | RuleOnly ->
