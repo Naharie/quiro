@@ -140,7 +140,10 @@ module rec Internal =
     let rec checkArgMatch ruleArg concreteArg argBindings =
         match ruleArg with
         | Variable ruleVar ->
-            Some (argBindings |> Map.add ruleVar concreteArg)
+            match concreteArg with
+            | Variable _ -> Some argBindings
+            | _ ->
+                Some (argBindings |> Map.add ruleVar concreteArg)
             
         | ListCons (ruleHead, ruleTail) ->
             match concreteArg with
