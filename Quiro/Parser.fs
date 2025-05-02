@@ -226,7 +226,7 @@ let comment: _ Parser = (ws) >>. skipChar '%' >>. manyChars (noneOf [ '\r'; '\t'
 
 let script: _ Parser =
     many1 (choice [
-        (ws1) >>. preturn BlankLine
+        ws1 >>. preturn BlankLine
         comment |>> Comment
         declaration |>> ScriptDeclaration
     ]) .>> eof

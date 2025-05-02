@@ -520,7 +520,7 @@ module rec Internal =
                 
                 newBindings
                 |> List.map (fun bindingGroup ->
-                    // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to to the outer scope.
+                    // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to the outer scope.
                     argPairs
                     |> List.choose (fun (ruleArg, outerArg) ->
                         match outerArg, ruleArg with

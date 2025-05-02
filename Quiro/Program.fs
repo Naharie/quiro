@@ -8,6 +8,24 @@ open Quiro.DataTypes
 let main args =
     let mutable scope = Scope.defaultScope
  
+    try
+        let dir = (Path.GetDirectoryName Environment.ProcessPath)
+        let stdlibPath = Path.Combine(dir, "stdlib.qi")
+        let scriptCode = File.ReadAllText stdlibPath
+        
+        match Parser.parseScript scriptCode with
+        | Ok declarations ->
+            for declaration in declarations do
+                scope <- Interpreter.execute declaration scope
+            
+        | Error parseError ->
+            printfn $"Failed to load stdlib: %s{parseError}"
+            exit -1
+    with
+    | err ->
+        printfn $"Failed to load stdlib: %O{err}"
+        exit -1
+    
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
     

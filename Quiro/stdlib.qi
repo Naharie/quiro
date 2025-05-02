@@ -1,0 +1,50 @@
+describe("nan") --> "The canonical representation of the result of a math operation that can not be expressed as a number.".
+describe("infinity") --> "Positive infinity".
+
+describe("print") --> "Displays text on the screen or reads from standard in.".
+describe("nl") --> "Prints a newline to standard out.".
+
+describe("<") --> "In A < B, true if A is less than B.".
+describe("<=") --> "In A <= B, true if A is less than or equal to B.".
+
+describe(">") --> "In A > B, true if A is greater than B.".
+describe(">=") --> "In A >= B, true if A is greater than or equal to B.".
+
+describe("=") --> "Determines if two expressions are equal (the expressions are not evaluated prior to comparison).".
+describe("=:=") --> "Evaluates two expressions and determines if the resulting values are equal.".
+describe("is") --> "Evaluates the right hand expression and determines if it is equal to the unevaluated left. Alternatively assigns right to left.".
+
+describe(",") --> "The goal conjunction and expression unification operator.".
+describe(";") --> "The goal disjunction operator.".
+
+describe("+") --> "Adds the two operands.".
+describe("-") --> "Subtracts the second operand from the first.".
+
+describe("*") --> "Multiplies the two operands.".
+describe("/") --> "Divides the first operand by the second.".
+describe("div") --> describe("/").
+describe("mod") --> "Computes the result of left modulus right.".
+describe("rem") --> "Computes the remainder of dividing left by right.".
+
+describe("**") --> "Raises the first operand to the power of the second.".
+describe("^") --> describe("**").
+
+describe("describe") --> "Provides a brief description of a goal or function's purpose.".
+
+describe("all") --> "True if predicate provided as the first operand is true for every element of the list provided as the second operand.".
+
+all(Pred, []).
+all(Pred, [ Head | Tail ]) :- Pred(Head), all(Pred, Tail).
+
+describe("any") --> "True if predicate provided as the first operand is true for any element of the list provided as the second operand.".
+
+any(Pred, []) :- false.
+any(Pred, [ Head | Tail ]) :- Pred(Head); any(Pred, Tail).
+
+describe("length") --> "Computes the length of P1 and writes it to P2 or scaffolds out a list of length P2 and writes it to P1.".
+
+length([], Length) :- Length is 0 .
+length([ A | B ], Length) :- length(B, LengthOfB), Length is LengthOfB + 1 .
+
+length(List, 0) :- List is [].
+length(List, Length) :- Length > 0, length(Tail, Length - 1), List is [ nil | Tail ].
