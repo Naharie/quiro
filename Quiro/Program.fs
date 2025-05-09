@@ -4,34 +4,19 @@ open System.Runtime.InteropServices.JavaScript
 open Quiro
 open Quiro.DataTypes
 
+// TODO: Allow cuts (func(x, y) -> a, b, !, c) where only c is returned.
+
 [<EntryPoint>]
 let main args =
     let mutable scope = Scope.defaultScope
- 
-    try
-        let dir = (Path.GetDirectoryName Environment.ProcessPath)
-        let stdlibPath = Path.Combine(dir, "stdlib.qi")
-        let scriptCode = File.ReadAllText stdlibPath
-        
-        match Parser.parseScript scriptCode with
-        | Ok declarations ->
-            for declaration in declarations do
-                scope <- Interpreter.execute declaration scope
-            
-        | Error parseError ->
-            printfn $"Failed to load stdlib: %s{parseError}"
-            exit -1
-    with
-    | err ->
-        printfn $"Failed to load stdlib: %O{err}"
-        exit -1
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
     
     while true do
         printf "?- "
-        let isQuery, shouldTrace, code =
+        
+        let isQuery, printDebugInfo, code =
             let raw = Console.ReadLine()
             
             if raw.EndsWith "??" then
@@ -61,15 +46,13 @@ let main args =
         elif isQuery then
             match Parser.parseGoal code with
             | Ok goal ->
-                let trace = if shouldTrace then RuleOnly else NoTrace
+                let debugLevel = if printDebugInfo then RuleOnly else NoDebugInfo
                 
                 try
-                    match Interpreter.query goal scope trace with
+                    match Interpreter.query goal scope debugLevel with
                     | Some bindings ->
                         printfn "Yes"
-                        
-                        if bindings.Length > 1 then
-                            printfn ""
+                        if bindings.Length > 1 then printfn ""
 
                         for bindingGroup in bindings do
                             for KeyValue(variable, value) in bindingGroup do
@@ -80,20 +63,17 @@ let main args =
                                     if isText then
                                         let text =
                                             values
-                                            |> List.map (function
-                                                | Number (Float v) -> char v.WholeValue
-                                                | _ -> ' '
-                                            )
+                                            |> List.map (function | Number n -> n.ToCharacter() | _ -> ' ')
                                             |> List.toArray
                                             |> String
                                             |> _.Replace("\\", "\\\\").Replace("\"", "\\\"")
-                                        
+
                                         printfn $"%s{variable} = \"%s{text}\""
                                     else
-                                        printfn $"%s{variable} = %s{Expression.toString value}"
+                                        printfn $"%s{variable} = %s{PrologExpression.toString value}"
 
                                 | _ ->
-                                    printfn $"%s{variable} = %s{Expression.toString value}"
+                                    printfn $"%s{variable} = %s{PrologExpression.toString value}"
 
                             if bindingGroup.Count > 1 then
                                 printfn ""  

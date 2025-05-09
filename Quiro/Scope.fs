@@ -10,10 +10,10 @@ open Quiro.Interpreter
 
 // Native Predicates
 
-let private makePred (handler : _ -> Map<string, Expression> list option) context args : Map<string, Expression> list option =
+let private makePred (handler : _ -> Map<string, PrologExpression> list option) context args : Map<string, PrologExpression> list option =
     Internal.evalArgs context args
     |> List.choose handler
-    |> List.noneOnEmpty
+    |> List.noneIfEmpty
     |> Option.map (List.collect id)
 
 let print = makePred (function
@@ -41,10 +41,10 @@ let print = makePred (function
                 |> String
                 |> Console.WriteLine
             else
-                Console.WriteLine (Expression.toString value)
+                Console.WriteLine (PrologExpression.toString value)
 
         | _ ->
-            Console.WriteLine (Expression.toString value)
+            Console.WriteLine (PrologExpression.toString value)
 
         Some [ Map.empty ]
     | _ ->
@@ -56,7 +56,7 @@ let nl _ _ =
     Some [ Map.empty ]
 
 let private one = Float BigDecimal.One
-let private mathCompPred name (leftVar: Number -> Expression list) (rightVar: Number -> Expression list) concrete context args =
+let private mathCompPred name (leftVar: Number -> PrologExpression list) (rightVar: Number -> PrologExpression list) concrete (context: InterpreterContext) args =
     let badUsage() = invalidOp $"Can't use the %s{name} predicate on non numbers"
     
     Internal.evalArgs context args
@@ -85,7 +85,7 @@ let private mathCompPred name (leftVar: Number -> Expression list) (rightVar: Nu
         | _ -> None
     )
     |> List.collect id
-    |> List.noneOnEmpty
+    |> List.noneIfEmpty
 
 let lessThan =
         mathCompPred "<"
@@ -179,7 +179,7 @@ let greaterThanOrEqual =
             )
             (>=)
 
-let exprEqual (_: Context) (args: Expression list) =
+let exprEqual (_: InterpreterContext) (args: PrologExpression list) =
     match args with
     | [ a; b ] ->
         if a = b then Some [] else None
@@ -190,12 +190,12 @@ let valEqual = makePred (function
     | _ -> None
 )
 
-let isOp (context: Context) (args: Expression list) =
+let isOp (context: InterpreterContext) (args: PrologExpression list) =
     match args with
     | [ left; right ] ->
         let right = Internal.evaluateExpr {
             depth = context.depth + 1
-            trace = context.trace
+            debugLevel = context.debugLevel
             
             scope = context.scope
             expression = right
@@ -234,17 +234,27 @@ let isOp (context: Context) (args: Expression list) =
 
 // Native Functions
 
-let private makeFunc (handler: Expression list -> Expression option) (context: Context) args =
+let private makeFunc (handler: PrologExpression list -> PrologExpression option) (context: InterpreterContext) args =
     Internal.evalArgs context args
     |> List.choose handler
-    |> List.noneOnEmpty
+    |> List.noneIfEmpty
 let private mathFunc handler =
     makeFunc (function
         | [ Number a; Number b ] -> Some (Number (handler a b))
         | _ -> None
     )
 
-let unify = makeFunc (List.last >> Some)
+let unify = makeFunc (fun args ->
+    let areAllArgsLists = args |> List.forall (function | ListTerm _ -> true | _ -> false)
+    
+    if areAllArgsLists then
+        args
+        |> List.collect (function | ListTerm values -> values | _ -> [])
+        |> ListTerm
+        |> Some
+    else
+        Some (ListTerm args)
+)
 
 let add = mathFunc (+)
 let subtract = mathFunc (-)

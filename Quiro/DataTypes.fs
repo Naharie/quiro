@@ -6,28 +6,43 @@ open System.Diagnostics
 open Microsoft.FSharp.Core
 open Quiro.DataTypes
 
-type Expression =
-    | Atom of atom:string  
+type PrologExpression =
+    // a, 'b', 'hello'
+    | Atom of atom:string
+    // 1, 1.5, nan, infinity
     | Number of Number
-    | ListTerm of list:Expression list
+    // "Hello World"
+    | Text of string
+    // [ 1, 2, 3 ]
+    | ListTerm of list:PrologExpression list
     
-    | FunctionCall of target:string * args:Expression list
-    | DynamicFunctionCall of var:string * args:Expression list
+    // func(x, y)
+    | FunctionCall of target:string * args:PrologExpression list
+    // Func(x, y)
+    | DynamicFunctionCall of var:string * args:PrologExpression list
     
+    // X, Y
     | Variable of name:string
-    | ListCons of head:Expression * tail:Expression
+    // [ Head | Tail ]
+    | ListCons of head:PrologExpression * tail:PrologExpression
+    // { Goal }
     | GoalExpr of Goal
 
 type Goal =
-    | SimpleGoal of functor:string * arguments:Expression list
-    | DynamicGoal of var:string * arguments:Expression list
+    // A direct goal is a simple predication such as even(X), where the top level expression does not itself involve subgoals.
+    | DirectGoal of functor:string * arguments:PrologExpression list
+    // A dynamic goal is a variable, such as Pred, being invoked as a direct goal.
+    | DynamicGoal of var:string * arguments:PrologExpression list
 
+    // Attempts to prove the given goal, and upon failure returns success with no bindings, or failure with bindings that prove the goal, thereby disproving its negation.
     | NegatedGoal of Goal
+    // The logical and operator; requires both sub goals to be provable to succeed.
     | ConjunctionGoal of Goal * Goal
+    // The logical or operator; requires at least one of the sub goals to be provable to succeed.
     | DisjunctionGoal of Goal * Goal 
 
-type Predicate = Predicate of functor:string * arguments:Expression list * goal:Goal
-type Function = Function of functor:string * arguments:Expression list * body:Expression
+type Predicate = Predicate of functor:string * arguments:PrologExpression list * goal:Goal
+type Function = Function of functor:string * arguments:PrologExpression list * body:PrologExpression
 
 type Declaration =
     | PredicateDeclaration of predicate:Predicate
@@ -35,7 +50,7 @@ type Declaration =
 
 // Using exceptions may seem antithetical to functional programming and the style of F#,
 // but sometimes it is the best option as it allows errors to bubble up from places that
-// are constrained by the type system, such as the number type above.
+// are constrained by the type system, such as the number type.
 type PrologException(message: string, stack: StackFrame list, inner: Exception) =
     inherit Exception(message, inner)
     new(message: string, stack: StackFrame list) = PrologException(message, stack, null)
@@ -51,31 +66,39 @@ type UnboundVariableException (variable: string, stack: StackFrame list) =
 
 type StackFrame =
     | GoalFrame of Goal
-    | ExpressionFrame of Expression
+    | ExpressionFrame of PrologExpression
     | FunctionFrame of Function
     | NativePredicate of string
     | NativeFunction of string
 
-type Trace = All | RuleOnly | OnlyTrue | NoTrace
+type DebugLevel =
+    // Print debug information about every single goal tested during the query.
+    | All
+    // Print debug information only about the rules tested during the query.
+    | RuleOnly
+    // Print debug information only about goals that succeed during the query.
+    | OnlyTrue
+    // Do not print any debug information.
+    | NoDebugInfo
 
-type Context = {
+type InterpreterContext = {
     depth: int
-    trace: Trace
+    debugLevel: DebugLevel
     
     stack: StackFrame list
     
-    seenGoals: Set<string * Expression list>
-    seenFunctions: Set<string * Expression list>
+    seenGoals: Set<string * PrologExpression list>
+    seenFunctions: Set<string * PrologExpression list>
     scope: Scope
 }
 and Scope = {
-    values: Map<string, Expression>
+    values: Map<string, PrologExpression>
     
     predicates: Map<(string * int), Predicate list>
-    nativePredicates: Map<string * int, (Context -> Expression list -> Map<string, Expression> list option) list>
+    nativePredicates: Map<string * int, (InterpreterContext -> PrologExpression list -> Map<string, PrologExpression> list option) list>
     
     functions: Map<(string * int), Function list>
-    nativeFunctions: Map<string * int, (Context -> Expression list -> Expression list option) list>
+    nativeFunctions: Map<string * int, (InterpreterContext -> PrologExpression list -> PrologExpression list option) list>
 }
 
 // Helper Values
@@ -130,12 +153,23 @@ module Scope =
                 |> Array.map Choice2Of2
         |]
 
-module Expression =
-    let rec toString (term: Expression) =
+module PrologExpression =
+    let rec toString (term: PrologExpression) =
         match term with
         | Atom name -> name
         | Variable name -> name
         | Number value -> string value
+        | Text value ->
+            let escaped =
+                value
+                    .Replace("\\", "\\\\")
+                    .Replace("\"", "\\\"")
+                    .Replace("\r", "\\r")
+                    .Replace("\n", "\\n")
+                    .Replace("\t", "\\t")
+                    
+            "\"" + escaped + "\""
+            
         | ListTerm values ->
             values
             |> List.map toString
@@ -156,9 +190,9 @@ module Expression =
 module Goal =
     let rec toString goal =
         match goal with
-        | SimpleGoal(goal, []) -> goal
-        | SimpleGoal(functor, args) | DynamicGoal(functor, args) ->
-            let argsStr = args |> List.map Expression.toString |> String.concat ", "
+        | DirectGoal(goal, []) -> goal
+        | DirectGoal(functor, args) | DynamicGoal(functor, args) ->
+            let argsStr = args |> List.map PrologExpression.toString |> String.concat ", "
             $"%s{functor}(%s{argsStr})"
         | NegatedGoal goal ->
             "\+ " + toString goal
@@ -173,7 +207,7 @@ module StackFrame =
             | GoalFrame goal ->
                 $"\tat goal %s{Goal.toString goal}"
             | ExpressionFrame expr ->
-                $"\tat expression %s{Expression.toString expr}"
+                $"\tat expression %s{PrologExpression.toString expr}"
             | FunctionFrame func ->
                 $"\tat function %s{Function.toString func}"
                 
@@ -187,13 +221,13 @@ module StackFrame =
 module Predicate =
     let toString predicate =
         let (Predicate (name, args, _)) = predicate
-        let args = args |> List.map Expression.toString |> String.concat ", "
+        let args = args |> List.map PrologExpression.toString |> String.concat ", "
         sprintf $"%s{name}(%s{args}) :-"
 
 module Function =
     let toString ``function`` =
         let (Function (name, args, _)) = ``function``
-        let args = args |> List.map Expression.toString |> String.concat ", "
+        let args = args |> List.map PrologExpression.toString |> String.concat ", "
         sprintf $"%s{name}(%s{args}) -->"
 
 module Declaration =

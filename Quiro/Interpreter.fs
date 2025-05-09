@@ -35,63 +35,63 @@ module rec Internal =
         Console.Write(prefix)
         Console.WriteLine(text)
 
-    type GoalContext = {
+    type GoalInterpreterContext = {
         depth: int
-        trace: Trace
+        debugLevel: DebugLevel
         
         goal: Goal
         
         scope: Scope
         
-        seenGoals: Set<string * Expression list>
-        seenFunctions: Set<string * Expression list>
+        seenGoals: Set<string * PrologExpression list>
+        seenFunctions: Set<string * PrologExpression list>
         
         stack: StackFrame list
     }
-    type private RuleContext = {
+    type private RuleInterpreterContext = {
         depth: int
-        trace: Trace
+        debugLevel: DebugLevel
         
-        currentGoal: string * Expression list
+        currentGoal: string * PrologExpression list
         predicate: Predicate
         
         scope: Scope
         
-        seenGoals: Set<string * Expression list>
-        seenFunctions: Set<string * Expression list>
+        seenGoals: Set<string * PrologExpression list>
+        seenFunctions: Set<string * PrologExpression list>
         stack: StackFrame list
     }
 
-    type ExpressionContext = {
+    type ExpressionInterpreterContext = {
         depth: int
-        trace: Trace
+        debugLevel: DebugLevel
         
-        expression: Expression
+        expression: PrologExpression
         
         scope: Scope
         
-        seenGoals: Set<string * Expression list>
-        seenFunctions: Set<string * Expression list>
+        seenGoals: Set<string * PrologExpression list>
+        seenFunctions: Set<string * PrologExpression list>
         stack: StackFrame list
     }
-    type private FunctionContext = {
+    type private FunctionInterpreterContext = {
         depth: int
-        trace: Trace
-        
-        currentExpr: string * Expression list
+        debugLevel: DebugLevel
+
+        currentExpr: string * PrologExpression list
         func: Function
         
         scope: Scope
         
-        seenGoals: Set<string * Expression list>
-        seenFunctions: Set<string * Expression list>
+        seenGoals: Set<string * PrologExpression list>
+        seenFunctions: Set<string * PrologExpression list>
         stack: StackFrame list
     }
 
     let rec private substituteVarsInGoal (scope: Scope) (goal: Goal) =
         match goal with
-        | SimpleGoal(functor, args) ->
-            SimpleGoal(
+        | DirectGoal(functor, args) ->
+            DirectGoal(
                 functor,
                 args
                 |> List.map(function
@@ -115,7 +115,7 @@ module rec Internal =
         | NegatedGoal goal -> NegatedGoal (substituteVarsInGoal scope goal)
         | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVarsInGoal scope a, substituteVarsInGoal scope b)
         | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVarsInGoal scope a, substituteVarsInGoal scope b)
-    let rec private substituteVarsInExpr (scope: Scope) (expr: Expression) =
+    let rec private substituteVarsInExpr (scope: Scope) (expr: PrologExpression) =
         match expr with
         | Atom _
         | Number _ -> expr
@@ -177,13 +177,13 @@ module rec Internal =
             | _ ->
                 if ruleArg = concreteArg then Some argBindings else None
   
-    let rec evalArgs (context: Context) args : Expression list list =
+    let rec evalArgs (context: InterpreterContext) args : PrologExpression list list =
         match args with
         | [] -> [ [] ]
         | arg :: args ->
             let arg = Internal.evaluateExpr {
                 depth = context.depth + 1
-                trace = context.trace
+                debugLevel = context.debugLevel
                 
                 expression = arg
                 scope = context.scope
@@ -206,10 +206,10 @@ module rec Internal =
             )
             |> List.collect id
     
-    let private testFunction args : (Expression * Map<string, Expression>) list option =
+    let private testFunction args : (PrologExpression * Map<string, PrologExpression>) list option =
         let {
             depth = depth
-            trace = trace
+            debugLevel = trace
             
             currentExpr = functor, callArgs
             func = func
@@ -258,14 +258,14 @@ module rec Internal =
                 let isMatch = if isMatch then "true" else "false"
                 print depth $"%s{Function.toString func} ? %s{isMatch}"
             | OnlyTrue -> if isMatch then print depth $"%s{Function.toString func}"
-            | RuleOnly | NoTrace -> ()
-        | RuleOnly | OnlyTrue | NoTrace -> ()
+            | RuleOnly | NoDebugInfo -> ()
+        | RuleOnly | OnlyTrue | NoDebugInfo -> ()
 
         // If the function matches then we need to evaluate the function's body.
         if isMatch then
             evaluateExpr {
                 depth = depth + 1
-                trace = trace
+                debugLevel = trace
                 
                 expression = body
 
@@ -278,10 +278,10 @@ module rec Internal =
             |> Some
         else
             None
-    let evaluateExpr args : (Expression * Map<string, Expression>) list =
+    let evaluateExpr args : (PrologExpression * Map<string, PrologExpression>) list =
         let {
             depth = depth
-            trace = trace
+            debugLevel = debugLevel
             
             expression = expr
             
@@ -291,12 +291,16 @@ module rec Internal =
             seenFunctions = seenFunctions
             stack = stack
         } = args
-        match trace with
+        match debugLevel with
         | All ->
-            print depth (Expression.toString expr)
+            print depth (PrologExpression.toString expr)
         | _ -> ()
         
         match expr with
+        // Functions can be declared without arguments, and so simply invoking the name is enough to cause execution of the function.
+        | Atom name when not (Array.isEmpty (Scope.lookupFunctions (name, 0) scope)) ->
+            evaluateExpr { args with depth = depth + 1; expression = FunctionCall(name, []) }
+        
         | Atom _
         | Number _
         | ListTerm _ ->
@@ -306,7 +310,7 @@ module rec Internal =
             let head =
                 evaluateExpr {
                     depth = depth + 1
-                    trace = trace
+                    debugLevel = debugLevel
                     expression = head
                     scope = scope
                     
@@ -320,7 +324,7 @@ module rec Internal =
                 let tail =
                     evaluateExpr {
                         depth = depth + 1
-                        trace = trace
+                        debugLevel = debugLevel
                         expression = tail
                         scope = scope
                         
@@ -343,7 +347,7 @@ module rec Internal =
         | GoalExpr goal ->
             match tryProveGoal {
                 depth = depth + 1
-                trace = trace
+                debugLevel = debugLevel
                 goal = goal
                 scope = scope
                 
@@ -369,7 +373,7 @@ module rec Internal =
             
             evalArgs {
                 depth = depth + 1
-                trace = trace
+                debugLevel = debugLevel
                 scope = scope
                 
                 seenGoals = seenGoals
@@ -386,7 +390,7 @@ module rec Internal =
                         | Choice1Of2 userFunction ->
                             let funcArgs = {
                                 depth = depth + 1
-                                trace = trace
+                                debugLevel = debugLevel
                                 
                                 func = userFunction
                                 currentExpr = functor, args 
@@ -402,9 +406,9 @@ module rec Internal =
                             | None -> values
                             
                         | Choice2Of2 nativeFunction ->
-                            let context: Context = {
+                            let context: InterpreterContext = {
                                 depth = depth + 1
-                                trace = trace
+                                debugLevel = debugLevel
                                 
                                 stack = (ExpressionFrame expr) :: stack
                                 
@@ -443,10 +447,10 @@ module rec Internal =
                 raise (UnboundVariableException(var, stack))
     
     /// Tests a rule against a goal to see if it matches, creating a table of any required bindings when it does.
-    let private testRule args : Map<string, Expression> list option =
+    let private testRule args : Map<string, PrologExpression> list option =
         let {
             depth = depth
-            trace = trace
+            debugLevel = trace
             
             currentGoal = _, outerArgs
             scope = scope
@@ -495,14 +499,14 @@ module rec Internal =
                 let isMatch = if isMatch then "true" else "false"
                 print depth $"%s{Predicate.toString rule} ? %s{isMatch}"
             | OnlyTrue -> if isMatch then print depth $"%s{Predicate.toString rule}"
-            | NoTrace -> ()
-        | OnlyTrue | NoTrace -> ()
+            | NoDebugInfo -> ()
+        | OnlyTrue | NoDebugInfo -> ()
 
         // If the rule matches then we need to try and prove the rule's goal.
         if isMatch then            
             match tryProveGoal {
                 depth = depth + 1
-                trace = trace
+                debugLevel = trace
                 
                 goal = ruleGoal
 
@@ -536,10 +540,10 @@ module rec Internal =
             | None -> None
         else
             None
-    let rec tryProveGoal args: Map<string, Expression> list option =
+    let rec tryProveGoal args: Map<string, PrologExpression> list option =
         let {
             depth = depth
-            trace = trace
+            debugLevel = debugLevel
             
             goal = goal
             
@@ -550,11 +554,11 @@ module rec Internal =
             stack = stack
         } = args
         
-        match trace with
+        match debugLevel with
         | All ->
             match goal with
-            | SimpleGoal ("true", []) -> ()
-            | SimpleGoal ("false", []) -> ()
+            | DirectGoal ("true", []) -> ()
+            | DirectGoal ("false", []) -> ()
             | _ ->
                 let printGoal = substituteVarsInGoal scope goal
                 print depth (Goal.toString printGoal)
@@ -563,16 +567,16 @@ module rec Internal =
         let expandedGoal = substituteVarsInGoal scope goal
         
         match goal with
-        | SimpleGoal ("true", []) -> Some [ Map.empty ]
-        | SimpleGoal ("false", []) -> None
+        | DirectGoal ("true", []) -> Some [ Map.empty ]
+        | DirectGoal ("false", []) -> None
 
-        | SimpleGoal (functor, args) ->
+        | DirectGoal (functor, args) ->
             let key = (functor, args.Length)
             let predicates = Scope.lookupPredicates key scope
             
             evalArgs {
                 depth = depth + 1
-                trace = trace
+                debugLevel = debugLevel
                 scope = scope
                 
                 seenGoals = seenGoals
@@ -590,7 +594,7 @@ module rec Internal =
                             | Choice1Of2 userPredicate ->
                                 let ruleArgs = {
                                     depth = depth + 1
-                                    trace = trace
+                                    debugLevel = debugLevel
                                     
                                     currentGoal = (functor, args)
                                     scope = scope
@@ -609,9 +613,9 @@ module rec Internal =
                                     (success, existingBindings)
                                 
                             | Choice2Of2 nativePredicate ->
-                                let context: Context = {
+                                let context: InterpreterContext = {
                                     depth = depth + 1
-                                    trace = trace
+                                    debugLevel = debugLevel
                                     
                                     stack = (GoalFrame goal) :: stack
                                     
@@ -635,11 +639,11 @@ module rec Internal =
                     if success then Some bindings else None
             )
             |> List.collect id
-            |> List.noneOnEmpty
+            |> List.noneIfEmpty
         | DynamicGoal (var, goalArgs) ->
             match Scope.lookupValue var scope with
             | Some (Atom name) ->
-                tryProveGoal { args with depth = depth + 1; goal = SimpleGoal(name, goalArgs) }
+                tryProveGoal { args with depth = depth + 1; goal = DirectGoal(name, goalArgs) }
                
             | Some _ ->
                 let message = "Can't perform a dynamic predicate invocation against a variable bound to something other than an atom!"
@@ -651,7 +655,7 @@ module rec Internal =
         | NegatedGoal subGoal ->
             let provability = tryProveGoal {
                 depth = depth + 1
-                trace = trace
+                debugLevel = debugLevel
                 
                 goal = subGoal
                 scope = scope
@@ -666,7 +670,7 @@ module rec Internal =
         | ConjunctionGoal (a, b) ->
             let provabilityA = tryProveGoal {
                 depth = depth + 1
-                trace = trace
+                debugLevel = debugLevel
                 
                 goal = a
                 scope = scope
@@ -687,7 +691,7 @@ module rec Internal =
                     for bindingSetA in bindingsA do
                         let provabilityB = tryProveGoal {
                             depth = depth + 1
-                            trace = trace
+                            debugLevel = debugLevel
                             
                             goal = b
                             scope = { scope with values = Map.merge bindingSetA scope.values }
@@ -715,7 +719,7 @@ module rec Internal =
         | DisjunctionGoal (a, b) ->
             let provability = tryProveGoal {
                 depth = depth + 1
-                trace = trace
+                debugLevel = debugLevel
                 
                 goal = a
                 scope = scope
@@ -730,7 +734,7 @@ module rec Internal =
             | None ->
                 tryProveGoal {
                     depth = depth + 1
-                    trace = trace
+                    debugLevel = debugLevel
                     
                     goal = b
                     scope = scope
@@ -741,10 +745,10 @@ module rec Internal =
                 }
 
 /// Query whether a given goal is true or false.
-let rec query (goal: Goal) (scope: Scope) (trace: Trace): Map<string, Expression> list option =
+let rec query (goal: Goal) (scope: Scope) (trace: DebugLevel): Map<string, PrologExpression> list option =
     Internal.tryProveGoal {
         depth = 0
-        trace = trace
+        debugLevel = trace
         goal = goal
         scope = scope
          

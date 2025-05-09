@@ -16,9 +16,6 @@
         <Compile Include="Interpreter.fs" />
         <Compile Include="Scope.fs" />
         <Compile Include="Program.fs"/>
-        <Content Include="stdlib.qi">
-          <CopyToOutputDirectory>Always</CopyToOutputDirectory>
-        </Content>
     </ItemGroup>
 
     <ItemGroup>

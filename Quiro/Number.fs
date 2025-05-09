@@ -92,7 +92,7 @@ with
             else
                 BigDecimal.Pow(a, b, BigDecimal.Precision)
         ) _.Pow a b
-        
+ 
     static member op_LessThan (a, b) =
         match a, b with
         | Float a, Float b -> a < b

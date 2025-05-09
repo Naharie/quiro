@@ -53,6 +53,8 @@ let atomExpr, atomParser =
     let atomTerm: _ Parser = atomParser |>> Atom <?> "atom"
         
     (atomTerm, atomParser)
+    
+// TODO: Stopping using number literal to allow statements such as (goal(X) :- X is 3.)
 let numberExpr: _ Parser =
     let options =
         NumberLiteralOptions.AllowMinusSign
@@ -79,8 +81,8 @@ let textExpr: _ Parser =
         |> Array.toList
         |> ListTerm
 
-let expressionNoComma, expressionNoCommaRef = createParserForwardedToRef() : Parser<Expression> * Parser<Expression> ref
-let expressionWithComma, expressionWithCommaRef = createParserForwardedToRef() : Parser<Expression> * Parser<Expression> ref
+let expressionNoComma, expressionNoCommaRef = createParserForwardedToRef() : Parser<PrologExpression> * Parser<PrologExpression> ref
+let expressionWithComma, expressionWithCommaRef = createParserForwardedToRef() : Parser<PrologExpression> * Parser<PrologExpression> ref
 
 let variableExpr, variableParser =
     let symbols = anyOf [ '_'; '~'; '`'; '!'; '@'; '#'; ]
@@ -135,14 +137,15 @@ let goal, goalRef = createParserForwardedToRef() : Parser<Goal> * Parser<Goal> r
 let parenExpr = skipChar '(' >>. ws >>. expressionWithComma .>> ws .>> skipChar ')'
 let goalExpr = skipChar '{' >>. ws >>. goal .>> ws .>> skipChar '}' |>> GoalExpr
 
-let operatorCommaExpression = OperatorPrecedenceParser<Expression, unit, unit>()
-let operatorNoCommaExpression = OperatorPrecedenceParser<Expression, unit, unit>()
+let expressionWithChaining = OperatorPrecedenceParser<PrologExpression, unit, unit>()
+let expressionWithoutChaining = OperatorPrecedenceParser<PrologExpression, unit, unit>()
 
-let private addExpressionOperators (doComma: bool) (operatorExpression: OperatorPrecedenceParser<Expression, unit, unit>) =
+let private addExpressionOperators (allowChaining: bool) (operatorExpression: OperatorPrecedenceParser<PrologExpression, unit, unit>) =
     let op name precedence =
         operatorExpression.AddOperator(InfixOperator(name, ws, precedence, Associativity.Left, fun a b -> FunctionCall(name, [ a; b ])))
 
-    if doComma then op "," 100
+    if allowChaining then
+        op "," 100
 
     op "+" 200
     op "-" 200
@@ -156,20 +159,20 @@ let private addExpressionOperators (doComma: bool) (operatorExpression: Operator
     op "**" 400
     op "^" 400
 
-operatorCommaExpression.TermParser <- ws >>. choice [
+expressionWithChaining.TermParser <- ws >>. choice [
     functionCallAtomOrVar
     numberExpr
     textExpr
     (attempt listConsExpr <|> listExpression)
     parenExpr
 ] .>> ws
-operatorNoCommaExpression.TermParser <- operatorCommaExpression.TermParser
+expressionWithoutChaining.TermParser <- expressionWithChaining.TermParser
 
-addExpressionOperators true operatorCommaExpression
-addExpressionOperators false operatorNoCommaExpression
+addExpressionOperators true expressionWithChaining
+addExpressionOperators false expressionWithoutChaining
 
-expressionNoCommaRef.Value <- operatorNoCommaExpression.ExpressionParser
-expressionWithCommaRef.Value <- operatorCommaExpression.ExpressionParser
+expressionNoCommaRef.Value <- expressionWithoutChaining.ExpressionParser
+expressionWithCommaRef.Value <- expressionWithChaining.ExpressionParser
 
 // Goals
 
@@ -183,14 +186,14 @@ let comparisonGoal: _ Parser =
         pstring "is"
     ] .>>. expressionNoComma
     |>> fun ((exprA, op), exprB) ->
-        SimpleGoal(op, [ exprA; exprB ])
+        DirectGoal(op, [ exprA; exprB ])
 let simpleGoal: _ Parser =
     compoundParser
     |>> fun (functor, args) ->
         if Char.IsUpper functor[0] then
             DynamicGoal(functor, args |> Option.defaultValue List.empty)
         else
-            SimpleGoal(functor, args |> Option.defaultValue List.empty)
+            DirectGoal(functor, args |> Option.defaultValue List.empty)
 let negatedGoal: _ Parser =
     skipString "\+" .>> ws >>. goal
     |>> NegatedGoal
@@ -220,7 +223,7 @@ let declaration: _ Parser =
              | Choice2Of2 expression ->
                  FunctionDeclaration(Function(functor, args, expression))
         | None ->
-            PredicateDeclaration (Predicate (functor, args, SimpleGoal ("true", List.empty)))
+            PredicateDeclaration (Predicate (functor, args, DirectGoal ("true", List.empty)))
 
 let comment: _ Parser = (ws) >>. skipChar '%' >>. manyChars (noneOf [ '\r'; '\t' ]) .>> ws
 
