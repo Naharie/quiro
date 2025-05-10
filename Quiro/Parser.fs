@@ -1,6 +1,7 @@
 module Quiro.Parser
 
 open System
+open System.Numerics
 open ExtendedNumerics
 open FParsec
 open DataTypes
@@ -53,20 +54,26 @@ let atomExpr, atomParser =
     let atomTerm: _ Parser = atomParser |>> Atom <?> "atom"
         
     (atomTerm, atomParser)
-    
-// TODO: Stopping using number literal to allow statements such as (goal(X) :- X is 3.)
+
 let numberExpr: _ Parser =
-    let options =
-        NumberLiteralOptions.AllowMinusSign
-        ||| NumberLiteralOptions.AllowFraction
-        ||| NumberLiteralOptions.AllowExponent
-        ||| NumberLiteralOptions.DefaultFloat
-    
-    numberLiteral options "number"
-    |>> fun literal ->
-        BigDecimal.Parse literal.String
-        |> Float
-        |> Number
+    opt (pchar '-') .>>. many1Chars digit .>>. opt (attempt (skipChar '.' >>. many1Chars digit)) .>>. opt (skipChar 'E' >>. many1Chars digit) <?> "number"
+    |>> fun (((negativeFlag, integerPart), fractionalPart), exponent) ->
+        let isNegative = Option.isSome negativeFlag
+        let numberText =
+            (if isNegative then "-" else "")
+            + integerPart
+            + (match fractionalPart with
+               | Some fraction -> "." + fraction
+               | None -> ""
+            )
+        let baseNumber = BigDecimal.Parse numberText
+        let exponent =
+            match exponent with
+            | Some exponent -> BigInteger.Parse exponent
+            | None -> BigInteger.One
+        let number = BigDecimal.Pow(baseNumber, exponent)
+        
+        Number (Float number)
 
 let textExpr: _ Parser =
     let quote = skipChar '"'
