@@ -32,12 +32,6 @@ let private writeDebugInformation indentation (text: string) =
     let prefix = String.replicate indentation "\t"
     Console.Write(prefix)
     Console.WriteLine(text)
-
-
-/// The provability of a goal that has been seen:
-/// Either we are inside that goal evaluating its provability, we have proved it already, or we have definitively shown it to be false. 
-type GoalProvability = Pending | Proved | Disproven
-type FunctionResult = Unresolved | Resolved of PrologExpression
  
 type InstantiatedGoal = string * PrologExpression list
 type InstantiatedFunction = string * PrologExpression
@@ -101,8 +95,6 @@ let rec private substituteVariablesInExpression (scope: Scope) (expr: PrologExpr
     | GoalExpr goal ->
         GoalExpr (substituteVariablesInGoal scope goal)
 
-// CONTINUE
-
 /// Determines if the specified value matches the given argument pattern, collecting any resulting input bindings into the provided `computedBindings`.
 /// The given context is used when needing to throw an error regarding insufficient substantiation.
 let rec private checkIfValueMatchesArgument term (context: InterpreterContext) computedBindings argument value =
@@ -165,7 +157,7 @@ let rec evalArgs (context: InterpreterContext) args : PrologExpression list list
     match args with
     | [] -> [ [] ]
     | arg :: args ->
-        let evaluatedArg = evaluateExpr (arg, {
+        let evaluatedArg = evaluateExpression (arg, {
             depth = context.depth + 1
             debugLevel = context.debugLevel
             
@@ -244,7 +236,7 @@ let private testFunction ((functor, callArgs), func, context) : (PrologExpressio
 
     // If the function matches then we need to evaluate the function's body.
     if isMatch then
-        evaluateExpr (body, {
+        evaluateExpression (body, {
             depth = depth + 1
             debugLevel = trace
             
@@ -257,7 +249,7 @@ let private testFunction ((functor, callArgs), func, context) : (PrologExpressio
         |> Some
     else
         None
-let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpression>) list =
+let evaluateExpression (expression, context) : (PrologExpression * Map<string, PrologExpression>) list =
     let {
         depth = depth
         debugLevel = debugLevel
@@ -268,45 +260,46 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
         seenFunctions = seenFunctions
         stack = stack
     } = context
+    
     match debugLevel with
     | All ->
-        writeDebugInformation depth (PrologExpression.toString expr)
+        writeDebugInformation depth (PrologExpression.toString expression)
     | _ -> ()
     
-    match expr with
+    match expression with
     // Functions can be declared without arguments, and so simply invoking the name is enough to cause execution of the function.
     | Atom name when not (Array.isEmpty (Scope.lookupFunctions (name, 0) scope)) ->
-        evaluateExpr (FunctionCall(name, []), { context with depth = depth + 1; })
+        evaluateExpression (FunctionCall(name, []), { context with depth = depth + 1; })
     
     | Atom _
     | Number _
     | ListTerm _
     | Text _ ->
-        [ expr, Map.empty ]
+        [ expression, Map.empty ]
 
     | ListCons (head, tail) ->
         let head =
-            evaluateExpr (head, {
+            evaluateExpression (head, {
                 depth = depth + 1
                 debugLevel = debugLevel
                 scope = scope
                 
                 seenGoals = seenGoals
                 seenFunctions = seenFunctions 
-                stack = (ExpressionFrame expr) :: stack 
+                stack = (ExpressionFrame expression) :: stack 
             })
 
         head
         |> List.map (fun (head, headVars) ->
             let tail =
-                evaluateExpr (tail, {
+                evaluateExpression (tail, {
                     depth = depth + 1
                     debugLevel = debugLevel
                     scope = scope
                     
                     seenGoals = seenGoals
                     seenFunctions = seenFunctions 
-                    stack = (ExpressionFrame expr) :: stack 
+                    stack = (ExpressionFrame expression) :: stack 
                 })
             
             tail
@@ -328,7 +321,7 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
             
             seenGoals = seenGoals
             seenFunctions = seenFunctions 
-            stack = (ExpressionFrame expr) :: stack
+            stack = (ExpressionFrame expression) :: stack
         }) with
         | Some bindings ->
             bindings
@@ -340,7 +333,7 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
         scope
         |> Scope.lookupValue name
         |> Option.map (fun value -> [ value, Map.empty ])
-        |> Option.defaultValue [ expr, Map.empty ]
+        |> Option.defaultValue [ expression, Map.empty ]
 
     | FunctionCall (functor, args) ->            
         let key = (functor, args.Length)
@@ -353,10 +346,11 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
             
             seenGoals = seenGoals
             seenFunctions = seenFunctions 
-            stack = (ExpressionFrame expr) :: stack
+            stack = (ExpressionFrame expression) :: stack
         } args
         |> List.map (fun args ->
-            if seenFunctions |> Set.contains (functor, args) then
+            // TODO: Is this correct?
+            if seenFunctions |> Map.containsKey (functor, args) then
                 []
             else
                 functions
@@ -370,8 +364,8 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
                             scope = scope
                              
                             seenGoals = seenGoals
-                            seenFunctions = seenFunctions |> Set.add(functor, args) 
-                            stack = (ExpressionFrame expr) :: stack 
+                            seenFunctions = seenFunctions |> Map.add (functor, args) Unresolved 
+                            stack = (ExpressionFrame expression) :: stack 
                         }
                         
                         match testFunction ((functor, args), userFunction, functionContext) with
@@ -383,10 +377,10 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
                             depth = depth + 1
                             debugLevel = debugLevel
                             
-                            stack = (ExpressionFrame expr) :: stack
+                            stack = (ExpressionFrame expression) :: stack
                             
                             seenGoals = seenGoals
-                            seenFunctions = seenFunctions |> Set.add(functor, args) 
+                            seenFunctions = seenFunctions |> Map.add (functor, args) Unresolved 
                             scope = scope
                         }
 
@@ -410,7 +404,7 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
     | DynamicFunctionCall (var, funcArgs) ->
         match Scope.lookupValue var scope with
         | Some (Atom name) ->
-            evaluateExpr (FunctionCall(name, funcArgs), context)
+            evaluateExpression (FunctionCall(name, funcArgs), context)
            
         | Some _ ->
             let message = "Can't perform a dynamic function invocation against a variable bound to something other than an atom!"
@@ -551,7 +545,8 @@ let rec tryProveGoal ((goal, context): GoalInterpreterContext): Map<string, Prol
             stack = (GoalFrame goal) :: stack 
         } args
         |> List.choose (fun args ->
-            if seenGoals |> Set.contains (functor, args) then
+            // TODO: Is this correct?
+            if seenGoals |> Map.containsKey (functor, args) then
                 None
             else        
                 let success, bindings =
@@ -560,14 +555,10 @@ let rec tryProveGoal ((goal, context): GoalInterpreterContext): Map<string, Prol
                         match predicate with
                         | Choice1Of2 userPredicate ->
                             let ruleContext = {
-                                depth = depth + 1
-                                debugLevel = debugLevel
-                                 
-                                scope = scope
-                                
-                                seenGoals = seenGoals |> Set.add (functor, args)
-                                seenFunctions = seenFunctions 
-                                stack = (GoalFrame expandedGoal) :: stack 
+                                context with
+                                    depth = depth + 1                                    
+                                    seenGoals = seenGoals |> Map.add (functor, args) Pending 
+                                    stack = (GoalFrame expandedGoal) :: stack 
                             }
 
                             match testRule ((functor, args), userPredicate, ruleContext) with
@@ -578,14 +569,10 @@ let rec tryProveGoal ((goal, context): GoalInterpreterContext): Map<string, Prol
                             
                         | Choice2Of2 nativePredicate ->
                             let context: InterpreterContext = {
-                                depth = depth + 1
-                                debugLevel = debugLevel
-                                
-                                stack = (GoalFrame goal) :: stack
-                                
-                                seenGoals = seenGoals |> Set.add (functor, args)
-                                seenFunctions = seenFunctions
-                                scope = scope
+                                context with
+                                    depth = depth + 1
+                                    stack = (GoalFrame goal) :: stack
+                                    seenGoals = seenGoals |> Map.add (functor, args) Pending
                             }
 
                             try
@@ -621,14 +608,9 @@ let rec tryProveGoal ((goal, context): GoalInterpreterContext): Map<string, Prol
     
     | NegatedGoal subGoal ->
         let provability = tryProveGoal (subGoal, {
-            depth = depth + 1
-            debugLevel = debugLevel
-            
-            scope = scope
-            
-            seenGoals = seenGoals 
-            seenFunctions = seenFunctions 
-            stack = (GoalFrame goal) :: stack
+            context with
+                depth = depth + 1 
+                stack = (GoalFrame goal) :: stack
         })
         
         Option.invert [] provability
@@ -694,7 +676,7 @@ let rec query (goal: Goal) (scope: Scope) (trace: DebugLevel): Map<string, Prolo
         debugLevel = trace
         scope = scope
          
-        seenGoals = Set.empty
-        seenFunctions = Set.empty
+        seenGoals = Map.empty
+        seenFunctions = Map.empty
         stack = [] 
     })

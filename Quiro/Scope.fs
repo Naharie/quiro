@@ -16,36 +16,33 @@ let private makePred (handler : _ -> Map<string, PrologExpression> list option) 
     |> List.noneIfEmpty
     |> Option.map (List.collect id)
 
-let print = makePred (function
+let println = makePred (function
     | [ Variable name ] ->
-        let value =
-            Console.ReadLine().ToCharArray()
-            |> Array.map (int >> BigDecimal >> Float >> Number)
-            |> Array.toList
-            |> ListTerm
-
+        let value = Text (Console.ReadLine())
         Some [ (Map.ofList [ (name, value) ]) ]
     
+    | [ Text text ] ->
+        Console.WriteLine text
+        Some [ Map.empty ]
+    
     | [ value ] ->
-        match value with
-        | ListTerm values ->
-            let isText = values |> List.forall(function | Number (Float v) -> v.DecimalPlaces <= 0 | _ -> false)
-            
-            if isText then
-                values
-                |> List.map (function
-                    | Number (Float v) -> char v.WholeValue
-                    | _ -> ' '
-                )
-                |> List.toArray
-                |> String
-                |> Console.WriteLine
-            else
-                Console.WriteLine (PrologExpression.toString value)
+        Console.WriteLine (PrologExpression.toString value)
+        Some [ Map.empty ]
+    | _ ->
+        None
+)
 
-        | _ ->
-            Console.WriteLine (PrologExpression.toString value)
+let print = makePred (function
+    | [ Variable name ] ->
+        let value = Console.Read() |> char |> string |> Text
+        Some [ (Map.ofList [ (name, value) ]) ]
 
+    | [ Text text ] ->
+        Console.Write text
+        Some [ Map.empty ]
+    
+    | [ value ] ->
+        Console.Write (PrologExpression.toString value)
         Some [ Map.empty ]
     | _ ->
         None
@@ -193,7 +190,7 @@ let valEqual = makePred (function
 let isOp (context: InterpreterContext) (args: PrologExpression list) =
     match args with
     | [ left; right ] ->
-        let right = evaluateExpr (right, {
+        let right = evaluateExpression (right, {
             context with
                 depth = context.depth + 1
                 stack = (NativePredicate "is" :: context.stack) 
@@ -266,9 +263,15 @@ let defaultScope = {
        "infinity", Number (Infinity true)
    |]
 
-   predicates = Map.empty
+   predicates = Map.ofArray [|
+       
+       
+   |]
+   
    nativePredicates = Map.ofArray [|
+       ("println", 1), [ println ]
        ("print", 1), [ print ]
+       
        ("nl", 0), [ nl ]
 
        ("<", 2), [ lessThan ]

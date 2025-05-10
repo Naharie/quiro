@@ -81,14 +81,19 @@ type DebugLevel =
     // Do not print any debug information.
     | NoDebugInfo
 
+/// The provability of a goal that has been seen:
+/// Either we are inside that goal evaluating its provability, we have proved it already, or we have definitively shown it to be false. 
+type GoalProvability = Pending | Proved | Disproven
+type FunctionResult = Unresolved | Resolved of PrologExpression
+
 type InterpreterContext = {
     depth: int
     debugLevel: DebugLevel
     
     stack: StackFrame list
     
-    seenGoals: Set<string * PrologExpression list>
-    seenFunctions: Set<string * PrologExpression list>
+    seenGoals: Map<string * PrologExpression list, GoalProvability>
+    seenFunctions: Map<string * PrologExpression list, FunctionResult>
     scope: Scope
 }
 and Scope = {

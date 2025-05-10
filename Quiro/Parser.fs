@@ -82,11 +82,7 @@ let textExpr: _ Parser =
     
     between quote quote (manyChars (unescapedChar <|> escapedChar))
     <?> "string"
-    |>> fun text ->
-        text.ToCharArray()
-        |> Array.map (int >> BigDecimal >> Float >> Number)
-        |> Array.toList
-        |> ListTerm
+    |>> Text
 
 let expressionNoComma, expressionNoCommaRef = createParserForwardedToRef() : Parser<PrologExpression> * Parser<PrologExpression> ref
 let expressionWithComma, expressionWithCommaRef = createParserForwardedToRef() : Parser<PrologExpression> * Parser<PrologExpression> ref
