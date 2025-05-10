@@ -11,7 +11,7 @@ open Quiro.Interpreter
 // Native Predicates
 
 let private makePred (handler : _ -> Map<string, PrologExpression> list option) context args : Map<string, PrologExpression> list option =
-    Internal.evalArgs context args
+    evalArgs context args
     |> List.choose handler
     |> List.noneIfEmpty
     |> Option.map (List.collect id)
@@ -59,7 +59,7 @@ let private one = Float BigDecimal.One
 let private mathCompPred name (leftVar: Number -> PrologExpression list) (rightVar: Number -> PrologExpression list) concrete (context: InterpreterContext) args =
     let badUsage() = invalidOp $"Can't use the %s{name} predicate on non numbers"
     
-    Internal.evalArgs context args
+    evalArgs context args
     |> List.choose (fun args ->
         match args with
         | [ Variable _; Variable _ ] -> raise (InsufficientSubstantiationException("<", context.stack))
@@ -193,17 +193,11 @@ let valEqual = makePred (function
 let isOp (context: InterpreterContext) (args: PrologExpression list) =
     match args with
     | [ left; right ] ->
-        let right = Internal.evaluateExpr {
-            depth = context.depth + 1
-            debugLevel = context.debugLevel
-            
-            scope = context.scope
-            expression = right
-            
-            seenGoals = context.seenGoals 
-            seenFunctions = context.seenFunctions
-            stack = (NativePredicate "is" :: context.stack) 
-        }
+        let right = evaluateExpr (right, {
+            context with
+                depth = context.depth + 1
+                stack = (NativePredicate "is" :: context.stack) 
+        })
         
         match left with
         | Variable name ->
@@ -235,7 +229,7 @@ let isOp (context: InterpreterContext) (args: PrologExpression list) =
 // Native Functions
 
 let private makeFunc (handler: PrologExpression list -> PrologExpression option) (context: InterpreterContext) args =
-    Internal.evalArgs context args
+    evalArgs context args
     |> List.choose handler
     |> List.noneIfEmpty
 let private mathFunc handler =

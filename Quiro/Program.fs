@@ -36,7 +36,7 @@ let main args =
                 match Parser.parseScript scriptCode with
                 | Ok declarations ->
                     for declaration in declarations do
-                        scope <- Interpreter.execute declaration scope
+                        scope <- Interpreter.storeDeclaration declaration scope
                     
                 | Error parseError ->
                     printfn $"%s{parseError}"
@@ -70,7 +70,7 @@ let main args =
         else
             match Parser.parseDeclaration code with
             | Ok declaration ->
-                scope <- Interpreter.execute declaration scope
+                scope <- Interpreter.storeDeclaration declaration scope
                 printfn "Stored"
             | Error message ->
                 printfn $"%s{message}"

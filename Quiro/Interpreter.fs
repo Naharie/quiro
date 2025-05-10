@@ -1,11 +1,10 @@
-module Quiro.Interpreter
+module rec Quiro.Interpreter
 
 open System
-open System.Linq.Expressions
 open Quiro.DataTypes
 
 /// Execute a declaration, that is, add it to the list of known declarations, but do not perform a query.
-let execute declaration (scope: Scope) =
+let storeDeclaration declaration (scope: Scope) =
     match declaration with
     | PredicateDeclaration (Predicate (functor, args, _) as predicate) ->
         let updatedDeclarations =
@@ -29,732 +28,654 @@ let execute declaration (scope: Scope) =
 
         { scope with functions = updatedDeclarations }
 
-module rec Internal =
-    let private print depth (text: string) =
-        let prefix = String.replicate depth "\t"
-        Console.Write(prefix)
-        Console.WriteLine(text)
+let private writeDebugInformation indentation (text: string) =
+    let prefix = String.replicate indentation "\t"
+    Console.Write(prefix)
+    Console.WriteLine(text)
 
-    type GoalInterpreterContext = {
-        depth: int
-        debugLevel: DebugLevel
-        
-        goal: Goal
-        
-        scope: Scope
-        
-        seenGoals: Set<string * PrologExpression list>
-        seenFunctions: Set<string * PrologExpression list>
-        
-        stack: StackFrame list
-    }
-    type private RuleInterpreterContext = {
-        depth: int
-        debugLevel: DebugLevel
-        
-        currentGoal: string * PrologExpression list
-        predicate: Predicate
-        
-        scope: Scope
-        
-        seenGoals: Set<string * PrologExpression list>
-        seenFunctions: Set<string * PrologExpression list>
-        stack: StackFrame list
-    }
 
-    type ExpressionInterpreterContext = {
-        depth: int
-        debugLevel: DebugLevel
-        
-        expression: PrologExpression
-        
-        scope: Scope
-        
-        seenGoals: Set<string * PrologExpression list>
-        seenFunctions: Set<string * PrologExpression list>
-        stack: StackFrame list
-    }
-    type private FunctionInterpreterContext = {
-        depth: int
-        debugLevel: DebugLevel
+/// The provability of a goal that has been seen:
+/// Either we are inside that goal evaluating its provability, we have proved it already, or we have definitively shown it to be false. 
+type GoalProvability = Pending | Proved | Disproven
+type FunctionResult = Unresolved | Resolved of PrologExpression
+ 
+type InstantiatedGoal = string * PrologExpression list
+type InstantiatedFunction = string * PrologExpression
 
-        currentExpr: string * PrologExpression list
-        func: Function
-        
-        scope: Scope
-        
-        seenGoals: Set<string * PrologExpression list>
-        seenFunctions: Set<string * PrologExpression list>
-        stack: StackFrame list
-    }
+type GoalInterpreterContext = Goal * InterpreterContext
+type private RuleInterpreterContext = (string * PrologExpression list) * Predicate * InterpreterContext 
 
-    let rec private substituteVarsInGoal (scope: Scope) (goal: Goal) =
-        match goal with
-        | DirectGoal(functor, args) ->
-            DirectGoal(
-                functor,
-                args
-                |> List.map(function
-                    | Variable name as var ->
-                        Scope.lookupValue name scope
-                        |> Option.defaultValue var
-                    | other -> other
-                )
+type ExpressionInterpreterContext = PrologExpression * InterpreterContext
+type private FunctionInterpreterContext = (string * PrologExpression list) * Function * InterpreterContext
+
+/// Substitutes all variables in the given goal that are defined in the provided scope.
+let rec private substituteVariablesInGoal (scope: Scope) (goal: Goal) =
+    match goal with
+    | DirectGoal(functor, args) ->
+        DirectGoal(
+            functor,
+            args
+            |> List.map(function
+                | Variable name as var ->
+                    Scope.lookupValue name scope
+                    |> Option.defaultValue var
+                | other -> other
             )
-        | DynamicGoal(functor, args) ->
-            DynamicGoal(
-                functor,
-                args
-                |> List.map(function
-                    | Variable name as var ->
-                        Scope.lookupValue name scope
-                        |> Option.defaultValue var
-                    | other -> other
-                )
+        )
+    | DynamicGoal(functor, args) ->
+        DynamicGoal(
+            functor,
+            args
+            |> List.map(function
+                | Variable name as var ->
+                    Scope.lookupValue name scope
+                    |> Option.defaultValue var
+                | other -> other
             )
-        | NegatedGoal goal -> NegatedGoal (substituteVarsInGoal scope goal)
-        | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVarsInGoal scope a, substituteVarsInGoal scope b)
-        | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVarsInGoal scope a, substituteVarsInGoal scope b)
-    let rec private substituteVarsInExpr (scope: Scope) (expr: PrologExpression) =
-        match expr with
-        | Atom _
-        | Number _
-        | Text _ -> expr
-        
-        | ListTerm values ->
-            ListTerm (values |> List.map (substituteVarsInExpr scope))
-        
-        | FunctionCall(target, args) ->
-            FunctionCall(target, args |> List.map (substituteVarsInExpr scope))
-        | DynamicFunctionCall(target, args) ->
-            DynamicFunctionCall(target, args |> List.map (substituteVarsInExpr scope))
-        
-        | Variable name ->
-            Scope.lookupValue name scope
-            |> Option.defaultValue expr
-            
-        | ListCons (head, tail) ->
-            ListCons(substituteVarsInExpr scope head, substituteVarsInExpr scope tail)
-            
-        | GoalExpr goal ->
-            GoalExpr (substituteVarsInGoal scope goal)
+        )
+    | NegatedGoal goal -> NegatedGoal (substituteVariablesInGoal scope goal)
+    | ConjunctionGoal(a, b) -> ConjunctionGoal(substituteVariablesInGoal scope a, substituteVariablesInGoal scope b)
+    | DisjunctionGoal(a, b) -> DisjunctionGoal(substituteVariablesInGoal scope a, substituteVariablesInGoal scope b)
+/// Substitutes all variables in the given expression that are defined in the provided scope.
+let rec private substituteVariablesInExpression (scope: Scope) (expr: PrologExpression) =
+    match expr with
+    | Atom _
+    | Number _
+    | Text _ -> expr
     
-    let rec checkArgMatch ruleArg concreteArg argBindings =
-        match ruleArg with
-        | Variable ruleVar ->
-            match concreteArg with
-            | Variable _ -> Some argBindings
-            | _ ->
-                Some (argBindings |> Map.add ruleVar concreteArg)
-            
-        | ListCons (ruleHead, ruleTail) ->
-            match concreteArg with
-            | ListTerm (concreteHead :: concreteTail) ->
-                match checkArgMatch ruleHead concreteHead argBindings with
-                | Some argBindings ->
-                    checkArgMatch ruleTail (ListTerm concreteTail) argBindings
-                | None -> None
-            | _ ->
-                None
+    | ListTerm values ->
+        ListTerm (values |> List.map (substituteVariablesInExpression scope))
+    
+    | FunctionCall(target, args) ->
+        FunctionCall(target, args |> List.map (substituteVariablesInExpression scope))
+    | DynamicFunctionCall(target, args) ->
+        DynamicFunctionCall(target, args |> List.map (substituteVariablesInExpression scope))
+    
+    | Variable name ->
+        Scope.lookupValue name scope
+        |> Option.defaultValue expr
+        
+    | ListCons (head, tail) ->
+        ListCons(substituteVariablesInExpression scope head, substituteVariablesInExpression scope tail)
+        
+    | GoalExpr goal ->
+        GoalExpr (substituteVariablesInGoal scope goal)
 
-        | ListTerm ruleTerms ->
-            match concreteArg with
-            | ListTerm concreteTerms ->
-                if ruleTerms.Length <> concreteTerms.Length then
-                    None
-                else
-                    List.zip ruleTerms concreteTerms
-                    |> List.fold (fun argBindings (ruleTerm, concreteTerm) ->
-                        match argBindings with
-                        | Some argBindings ->
-                            checkArgMatch ruleTerm concreteTerm argBindings
-                        | None -> None
-                    ) (Some argBindings)
-            | _ ->
-                None
+// CONTINUE
+
+let rec private checkArgMatch ruleArg concreteArg argBindings =
+    match ruleArg with
+    | Variable ruleVar ->
+        match concreteArg with
+        | Variable _ -> Some argBindings
         | _ ->
-            match concreteArg with
-            | Variable _ -> Some argBindings
-            | _ ->
-                if ruleArg = concreteArg then Some argBindings else None
-  
-    let rec evalArgs (context: InterpreterContext) args : PrologExpression list list =
-        match args with
-        | [] -> [ [] ]
-        | arg :: args ->
-            let arg = Internal.evaluateExpr {
-                depth = context.depth + 1
-                debugLevel = context.debugLevel
-                
-                expression = arg
-                scope = context.scope
-                
-                seenGoals = context.seenGoals
-                seenFunctions = context.seenFunctions 
-                stack = (NativeFunction "," :: context.stack)
+            Some (argBindings |> Map.add ruleVar concreteArg)
+        
+    | ListCons (ruleHead, ruleTail) ->
+        match concreteArg with
+        | ListTerm (concreteHead :: concreteTail) ->
+            match checkArgMatch ruleHead concreteHead argBindings with
+            | Some argBindings ->
+                checkArgMatch ruleTail (ListTerm concreteTail) argBindings
+            | None -> None
+        | _ ->
+            None
+
+    | ListTerm ruleTerms ->
+        match concreteArg with
+        | ListTerm concreteTerms ->
+            if ruleTerms.Length <> concreteTerms.Length then
+                None
+            else
+                List.zip ruleTerms concreteTerms
+                |> List.fold (fun argBindings (ruleTerm, concreteTerm) ->
+                    match argBindings with
+                    | Some argBindings ->
+                        checkArgMatch ruleTerm concreteTerm argBindings
+                    | None -> None
+                ) (Some argBindings)
+        | _ ->
+            None
+    | _ ->
+        match concreteArg with
+        | Variable _ -> Some argBindings
+        | _ ->
+            if ruleArg = concreteArg then Some argBindings else None
+
+let rec evalArgs (context: InterpreterContext) args : PrologExpression list list =
+    match args with
+    | [] -> [ [] ]
+    | arg :: args ->
+        let evaluatedArg = evaluateExpr (arg, {
+            depth = context.depth + 1
+            debugLevel = context.debugLevel
+            
+            scope = context.scope
+            
+            seenGoals = context.seenGoals
+            seenFunctions = context.seenFunctions 
+            stack = (NativeFunction "," :: context.stack)
+        })
+        
+        evaluatedArg
+        |> List.map (fun (value, bindings) ->
+            let scope = {
+                context.scope with
+                    values = Map.merge context.scope.values bindings 
             }
+            let context = { context with scope = scope }
             
-            arg
-            |> List.map (fun (value, bindings) ->
-                let scope = {
-                    context.scope with
-                        values = Map.merge context.scope.values bindings 
-                }
-                let context = { context with scope = scope }
-                
-                evalArgs context args
-                |> List.map (fun argSet -> value :: argSet)
-            )
-            |> List.collect id
+            evalArgs context args
+            |> List.map (fun argSet -> value :: argSet)
+        )
+        |> List.collect id
+
+let private testFunction args : (PrologExpression * Map<string, PrologExpression>) list option =
+    let ((functor, callArgs), func, {
+        depth = depth
+        debugLevel = trace
+        
+        scope = scope
+        
+        seenGoals = seenGoals
+        seenFunctions = seenFunctions
+        stack = stack
+    }) = args
     
-    let private testFunction args : (PrologExpression * Map<string, PrologExpression>) list option =
-        let {
-            depth = depth
-            debugLevel = trace
-            
-            currentExpr = functor, callArgs
-            func = func
-            scope = scope
-            
-            seenGoals = seenGoals
-            seenFunctions = seenFunctions
-            stack = stack
-        } = args
-        
-        let (Function(_, funcArgs, body)) = func
-        let argPairs = List.zip funcArgs callArgs
-        
-        /// Build a mapping of variable names used in the goal to the supplied concrete values,
-        /// all the while checking that any non-variable arguments the rule demands are satisfied.
-        let rawArgBindings =
-            argPairs
-            |> List.fold (fun argBindings (funcArg, concreteArg) ->
-                match argBindings with
-                | Some argBindings ->
-                    checkArgMatch funcArg concreteArg argBindings
-                | None -> None
-            ) (Some Map.empty)
-        let isMatch, argBindings =
-            match rawArgBindings with
-            | Some bindings -> true, bindings
-            | None -> false, Map.empty
-         
-        let subScope = { scope with values = argBindings  }
+    let (Function(_, funcArgs, body)) = func
+    let argPairs = List.zip funcArgs callArgs
+    
+    /// Build a mapping of variable names used in the goal to the supplied concrete values,
+    /// all the while checking that any non-variable arguments the rule demands are satisfied.
+    let rawArgBindings =
+        argPairs
+        |> List.fold (fun argBindings (funcArg, concreteArg) ->
+            match argBindings with
+            | Some argBindings ->
+                checkArgMatch funcArg concreteArg argBindings
+            | None -> None
+        ) (Some Map.empty)
+    let isMatch, argBindings =
+        match rawArgBindings with
+        | Some bindings -> true, bindings
+        | None -> false, Map.empty
+     
+    let subScope = { scope with values = argBindings  }
+    
+    match trace with
+    | All | OnlyTrue ->
+        let ruleArgs =
+            funcArgs
+            |> List.map(function
+                | Variable name as var ->
+                    argBindings
+                    |> Map.tryFind name
+                    |> Option.defaultValue var
+                | other -> other
+            )
+        let func = Function(functor, ruleArgs, body)
         
         match trace with
-        | All | OnlyTrue ->
-            let ruleArgs =
-                funcArgs
-                |> List.map(function
-                    | Variable name as var ->
-                        argBindings
-                        |> Map.tryFind name
-                        |> Option.defaultValue var
-                    | other -> other
-                )
-            let func = Function(functor, ruleArgs, body)
+        | All ->
+            let isMatch = if isMatch then "true" else "false"
+            writeDebugInformation depth $"%s{Function.toString func} ? %s{isMatch}"
+        | OnlyTrue -> if isMatch then writeDebugInformation depth $"%s{Function.toString func}"
+        | RuleOnly | NoDebugInfo -> ()
+    | RuleOnly | OnlyTrue | NoDebugInfo -> ()
+
+    // If the function matches then we need to evaluate the function's body.
+    if isMatch then
+        evaluateExpr (body, {
+            depth = depth + 1
+            debugLevel = trace
             
-            match trace with
-            | All ->
-                let isMatch = if isMatch then "true" else "false"
-                print depth $"%s{Function.toString func} ? %s{isMatch}"
-            | OnlyTrue -> if isMatch then print depth $"%s{Function.toString func}"
-            | RuleOnly | NoDebugInfo -> ()
-        | RuleOnly | OnlyTrue | NoDebugInfo -> ()
+            scope = subScope
+            
+            seenGoals = seenGoals
+            seenFunctions = seenFunctions 
+            stack = (FunctionFrame func) :: stack 
+        })
+        |> Some
+    else
+        None
+let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpression>) list =
+    let {
+        depth = depth
+        debugLevel = debugLevel
+        
+        scope = scope
+        
+        seenGoals = seenGoals
+        seenFunctions = seenFunctions
+        stack = stack
+    } = context
+    match debugLevel with
+    | All ->
+        writeDebugInformation depth (PrologExpression.toString expr)
+    | _ -> ()
+    
+    match expr with
+    // Functions can be declared without arguments, and so simply invoking the name is enough to cause execution of the function.
+    | Atom name when not (Array.isEmpty (Scope.lookupFunctions (name, 0) scope)) ->
+        evaluateExpr (FunctionCall(name, []), { context with depth = depth + 1; })
+    
+    | Atom _
+    | Number _
+    | ListTerm _
+    | Text _ ->
+        [ expr, Map.empty ]
 
-        // If the function matches then we need to evaluate the function's body.
-        if isMatch then
-            evaluateExpr {
+    | ListCons (head, tail) ->
+        let head =
+            evaluateExpr (head, {
                 depth = depth + 1
-                debugLevel = trace
-                
-                expression = body
-
-                scope = subScope
+                debugLevel = debugLevel
+                scope = scope
                 
                 seenGoals = seenGoals
                 seenFunctions = seenFunctions 
-                stack = (FunctionFrame func) :: stack 
-            }
-            |> Some
-        else
-            None
-    let evaluateExpr args : (PrologExpression * Map<string, PrologExpression>) list =
-        let {
-            depth = depth
-            debugLevel = debugLevel
-            
-            expression = expr
-            
-            scope = scope
-            
-            seenGoals = seenGoals
-            seenFunctions = seenFunctions
-            stack = stack
-        } = args
-        match debugLevel with
-        | All ->
-            print depth (PrologExpression.toString expr)
-        | _ -> ()
-        
-        match expr with
-        // Functions can be declared without arguments, and so simply invoking the name is enough to cause execution of the function.
-        | Atom name when not (Array.isEmpty (Scope.lookupFunctions (name, 0) scope)) ->
-            evaluateExpr { args with depth = depth + 1; expression = FunctionCall(name, []) }
-        
-        | Atom _
-        | Number _
-        | ListTerm _
-        | Text _ ->
-            [ expr, Map.empty ]
+                stack = (ExpressionFrame expr) :: stack 
+            })
 
-        | ListCons (head, tail) ->
-            let head =
-                evaluateExpr {
+        head
+        |> List.map (fun (head, headVars) ->
+            let tail =
+                evaluateExpr (tail, {
                     depth = depth + 1
                     debugLevel = debugLevel
-                    expression = head
                     scope = scope
                     
                     seenGoals = seenGoals
                     seenFunctions = seenFunctions 
                     stack = (ExpressionFrame expr) :: stack 
-                }
-
-            head
-            |> List.map (fun (head, headVars) ->
-                let tail =
-                    evaluateExpr {
-                        depth = depth + 1
-                        debugLevel = debugLevel
-                        expression = tail
-                        scope = scope
-                        
-                        seenGoals = seenGoals
-                        seenFunctions = seenFunctions 
-                        stack = (ExpressionFrame expr) :: stack 
-                    }
-                
-                tail
-                |> List.map (fun (tail, tailVars) ->
-                    match tail with
-                    | ListTerm tail ->
-                        ListTerm (head :: tail), (Map.merge headVars tailVars)
-                    | _ ->
-                        ListTerm ([ head; tail ]), (Map.merge headVars tailVars)
-                )
-            )
-            |> List.collect id
-        
-        | GoalExpr goal ->
-            match tryProveGoal {
-                depth = depth + 1
-                debugLevel = debugLevel
-                goal = goal
-                scope = scope
-                
-                seenGoals = seenGoals
-                seenFunctions = seenFunctions 
-                stack = (ExpressionFrame expr) :: stack
-            } with
-            | Some bindings ->
-                bindings
-                |> List.map (fun bindingSet -> Atom "true", bindingSet)
-            | None ->
-                [ Atom "false", Map.empty ]
-        
-        | Variable name ->
-            scope
-            |> Scope.lookupValue name
-            |> Option.map (fun value -> [ value, Map.empty ])
-            |> Option.defaultValue [ expr, Map.empty ]
-    
-        | FunctionCall (functor, args) ->            
-            let key = (functor, args.Length)
-            let functions = Scope.lookupFunctions key scope
+                })
             
-            evalArgs {
-                depth = depth + 1
-                debugLevel = debugLevel
-                scope = scope
+            tail
+            |> List.map (fun (tail, tailVars) ->
+                match tail with
+                | ListTerm tail ->
+                    ListTerm (head :: tail), (Map.merge headVars tailVars)
+                | _ ->
+                    ListTerm ([ head; tail ]), (Map.merge headVars tailVars)
+            )
+        )
+        |> List.collect id
+    
+    | GoalExpr goal ->
+        match tryProveGoal (goal, {
+            depth = depth + 1
+            debugLevel = debugLevel
+            scope = scope
+            
+            seenGoals = seenGoals
+            seenFunctions = seenFunctions 
+            stack = (ExpressionFrame expr) :: stack
+        }) with
+        | Some bindings ->
+            bindings
+            |> List.map (fun bindingSet -> Atom "true", bindingSet)
+        | None ->
+            [ Atom "false", Map.empty ]
+    
+    | Variable name ->
+        scope
+        |> Scope.lookupValue name
+        |> Option.map (fun value -> [ value, Map.empty ])
+        |> Option.defaultValue [ expr, Map.empty ]
+
+    | FunctionCall (functor, args) ->            
+        let key = (functor, args.Length)
+        let functions = Scope.lookupFunctions key scope
+        
+        evalArgs {
+            depth = depth + 1
+            debugLevel = debugLevel
+            scope = scope
+            
+            seenGoals = seenGoals
+            seenFunctions = seenFunctions 
+            stack = (ExpressionFrame expr) :: stack
+        } args
+        |> List.map (fun args ->
+            if seenFunctions |> Set.contains (functor, args) then
+                []
+            else
+                functions
+                |> Array.fold (fun values ``function`` ->
+                    match ``function`` with
+                    | Choice1Of2 userFunction ->
+                        let functionContext = {
+                            depth = depth + 1
+                            debugLevel = debugLevel
+                            
+                            scope = scope
+                             
+                            seenGoals = seenGoals
+                            seenFunctions = seenFunctions |> Set.add(functor, args) 
+                            stack = (ExpressionFrame expr) :: stack 
+                        }
+                        
+                        match testFunction ((functor, args), userFunction, functionContext) with
+                        | Some results -> List.append results values
+                        | None -> values
+                        
+                    | Choice2Of2 nativeFunction ->
+                        let context: InterpreterContext = {
+                            depth = depth + 1
+                            debugLevel = debugLevel
+                            
+                            stack = (ExpressionFrame expr) :: stack
+                            
+                            seenGoals = seenGoals
+                            seenFunctions = seenFunctions |> Set.add(functor, args) 
+                            scope = scope
+                        }
+
+                        try
+                            match nativeFunction context args with
+                            | Some results ->
+                                let results =
+                                    results
+                                    |> List.map (fun expr -> expr, Map.empty)
+
+                                List.append results values
+                            | None -> values
+                        with
+                        | :? PrologException -> reraise()
+                        | error ->
+                            raise (PrologException(error.Message, stack, error))
+                ) []
+        )
+        |> List.collect id
+
+    | DynamicFunctionCall (var, funcArgs) ->
+        match Scope.lookupValue var scope with
+        | Some (Atom name) ->
+            evaluateExpr (FunctionCall(name, funcArgs), context)
+           
+        | Some _ ->
+            let message = "Can't perform a dynamic function invocation against a variable bound to something other than an atom!"
+            raise (PrologException(message, stack, InvalidOperationException(message)))
+            
+        | None ->
+            raise (UnboundVariableException(var, stack))
+
+/// Tests a rule against a goal to see if it matches, creating a table of any required bindings when it does.
+let private testRule (((_, outerArgs), predicate, context): RuleInterpreterContext) : Map<string, PrologExpression> list option =
+    let (Predicate(ruleFunctor, ruleArgs, ruleGoal)) = predicate
+    let {
+        depth = depth
+        debugLevel = trace
+
+        scope = scope
                 
-                seenGoals = seenGoals
-                seenFunctions = seenFunctions 
-                stack = (ExpressionFrame expr) :: stack
-            } args
-            |> List.map (fun args ->
-                if seenFunctions |> Set.contains (functor, args) then
-                    []
-                else
-                    functions
-                    |> Array.fold (fun values ``function`` ->
-                        match ``function`` with
-                        | Choice1Of2 userFunction ->
-                            let funcArgs = {
+        seenGoals = seenGoals
+        seenFunctions = seenFunctions
+        stack = stack
+    } = context
+    
+    let argPairs = List.zip ruleArgs outerArgs
+    
+    /// Build a mapping of variable names used in the goal to the supplied concrete values,
+    /// all the while checking that any non-variable arguments the rule demands are satisfied.
+    let rawArgBindings =
+        argPairs
+        |> List.fold (fun argBindings (ruleArg, concreteArg) ->
+            match argBindings with
+            | Some argBindings ->
+                match concreteArg with
+                | Variable name ->
+                    let concreteArg =
+                        Scope.lookupValue name scope
+                        |> Option.defaultValue concreteArg
+                
+                    checkArgMatch ruleArg concreteArg argBindings
+                | _ ->
+                    checkArgMatch ruleArg concreteArg argBindings
+            | None -> None
+        ) (Some Map.empty)
+    
+    let isMatch, argBindings =
+        match rawArgBindings with
+        | Some bindings -> true, bindings
+        | None -> false, Map.empty
+
+    let subScope = { scope with values = argBindings  }
+    
+    match trace with
+    | All | RuleOnly | OnlyTrue ->
+        let rule = Predicate(ruleFunctor, outerArgs, substituteVariablesInGoal subScope ruleGoal)
+        
+        match trace with
+        | All | RuleOnly ->
+            let isMatch = if isMatch then "true" else "false"
+            writeDebugInformation depth $"%s{Predicate.toString rule} ? %s{isMatch}"
+        | OnlyTrue -> if isMatch then writeDebugInformation depth $"%s{Predicate.toString rule}"
+        | NoDebugInfo -> ()
+    | OnlyTrue | NoDebugInfo -> ()
+
+    // If the rule matches then we need to try and prove the rule's goal.
+    if isMatch then            
+        match tryProveGoal (ruleGoal, {
+            depth = depth + 1
+            debugLevel = trace
+            
+            scope = subScope
+            
+            seenGoals = seenGoals
+            seenFunctions = seenFunctions 
+            stack = (GoalFrame ruleGoal) :: stack 
+        }) with
+        | Some newBindings ->
+            let newBindings =
+                match newBindings with
+                | [] -> [ Map.empty ]
+                | _ -> newBindings
+            
+            newBindings
+            |> List.map (fun bindingGroup ->
+                // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to the outer scope.
+                argPairs
+                |> List.choose (fun (ruleArg, outerArg) ->
+                    match outerArg, ruleArg with
+                    | Variable name, Variable innerName ->
+                        bindingGroup |> Map.tryFind innerName
+                        |> Option.map (fun value -> name, value)
+                    | Variable name, _ -> Some (name, ruleArg)
+                    | _ -> None
+                )
+                |> Map.ofList
+            )
+            |> Some
+        | None -> None
+    else
+        None
+let rec tryProveGoal ((goal, context): GoalInterpreterContext): Map<string, PrologExpression> list option =
+    let {
+        depth = depth
+        debugLevel = debugLevel
+        
+        scope = scope
+        
+        seenGoals = seenGoals
+        seenFunctions = seenFunctions
+        stack = stack
+    } = context
+    
+    match debugLevel with
+    | All ->
+        match goal with
+        | DirectGoal ("true", []) -> ()
+        | DirectGoal ("false", []) -> ()
+        | _ ->
+            let printGoal = substituteVariablesInGoal scope goal
+            writeDebugInformation depth (Goal.toString printGoal)
+    | _ -> ()
+    
+    let expandedGoal = substituteVariablesInGoal scope goal
+    
+    match goal with
+    | DirectGoal ("true", []) -> Some [ Map.empty ]
+    | DirectGoal ("false", []) -> None
+
+    | DirectGoal (functor, args) ->
+        let key = (functor, args.Length)
+        let predicates = Scope.lookupPredicates key scope
+        
+        evalArgs {
+            depth = depth + 1
+            debugLevel = debugLevel
+            scope = scope
+            
+            seenGoals = seenGoals
+            seenFunctions = seenFunctions 
+            stack = (GoalFrame goal) :: stack 
+        } args
+        |> List.choose (fun args ->
+            if seenGoals |> Set.contains (functor, args) then
+                None
+            else        
+                let success, bindings =
+                    predicates
+                    |> Array.fold (fun (success, existingBindings) predicate ->
+                        match predicate with
+                        | Choice1Of2 userPredicate ->
+                            let ruleContext = {
                                 depth = depth + 1
                                 debugLevel = debugLevel
-                                
-                                func = userFunction
-                                currentExpr = functor, args 
-                                scope = scope
                                  
-                                seenGoals = seenGoals
-                                seenFunctions = seenFunctions |> Set.add(functor, args) 
-                                stack = (ExpressionFrame expr) :: stack 
+                                scope = scope
+                                
+                                seenGoals = seenGoals |> Set.add (functor, args)
+                                seenFunctions = seenFunctions 
+                                stack = (GoalFrame expandedGoal) :: stack 
                             }
+
+                            match testRule ((functor, args), userPredicate, ruleContext) with
+                            | Some newBindings ->
+                                (true, List.append newBindings existingBindings)
+                            | None ->
+                                (success, existingBindings)
                             
-                            match testFunction funcArgs with
-                            | Some results -> List.append results values
-                            | None -> values
-                            
-                        | Choice2Of2 nativeFunction ->
+                        | Choice2Of2 nativePredicate ->
                             let context: InterpreterContext = {
                                 depth = depth + 1
                                 debugLevel = debugLevel
                                 
-                                stack = (ExpressionFrame expr) :: stack
+                                stack = (GoalFrame goal) :: stack
                                 
-                                seenGoals = seenGoals
-                                seenFunctions = seenFunctions |> Set.add(functor, args) 
+                                seenGoals = seenGoals |> Set.add (functor, args)
+                                seenFunctions = seenFunctions
                                 scope = scope
                             }
 
                             try
-                                match nativeFunction context args with
-                                | Some results ->
-                                    let results =
-                                        results
-                                        |> List.map (fun expr -> expr, Map.empty)
-
-                                    List.append results values
-                                | None -> values
+                                match nativePredicate context args with
+                                | Some bindings ->
+                                    (true, List.append bindings existingBindings)
+                                | None ->
+                                    (success, existingBindings)
                             with
                             | :? PrologException -> reraise()
                             | error ->
                                 raise (PrologException(error.Message, stack, error))
-                    ) []
-            )
-            |> List.collect id
+                    ) (false, [])
+                
+                if success then Some bindings else None
+        )
+        |> List.collect id
+        |> List.noneIfEmpty
+    | DynamicGoal (var, goalArgs) ->
+        match Scope.lookupValue var scope with
+        | Some (Atom name) ->
+            tryProveGoal (DirectGoal(name, goalArgs), context)
+           
+        | Some _ ->
+            let message = "Can't perform a dynamic predicate invocation against a variable bound to something other than an atom!"
+            raise (PrologException(message, stack, InvalidOperationException(message)))
+            
+        | None ->
+            raise (UnboundVariableException(var, stack))
     
-        | DynamicFunctionCall (var, funcArgs) ->
-            match Scope.lookupValue var scope with
-            | Some (Atom name) ->
-                evaluateExpr { args with depth = depth + 1; expression = FunctionCall(name, funcArgs) }
-               
-            | Some _ ->
-                let message = "Can't perform a dynamic function invocation against a variable bound to something other than an atom!"
-                raise (PrologException(message, stack, InvalidOperationException(message)))
-                
-            | None ->
-                raise (UnboundVariableException(var, stack))
+    // TODO: Don't use expanded goal, instead save the scope in case we need to substitute later for a stacktrace,
+    // potentially allowing us to avoid iterating the goal tree twice if an exception does *not* occur.
     
-    /// Tests a rule against a goal to see if it matches, creating a table of any required bindings when it does.
-    let private testRule args : Map<string, PrologExpression> list option =
-        let {
-            depth = depth
-            debugLevel = trace
-            
-            currentGoal = _, outerArgs
-            scope = scope
-            
-            predicate = Predicate(ruleFunctor, ruleArgs, ruleGoal)
-            
-            seenGoals = seenGoals
-            seenFunctions = seenFunctions
-            stack = stack
-        } = args
-        
-        let argPairs = List.zip ruleArgs outerArgs
-        
-        /// Build a mapping of variable names used in the goal to the supplied concrete values,
-        /// all the while checking that any non-variable arguments the rule demands are satisfied.
-        let rawArgBindings =
-            argPairs
-            |> List.fold (fun argBindings (ruleArg, concreteArg) ->
-                match argBindings with
-                | Some argBindings ->
-                    match concreteArg with
-                    | Variable name ->
-                        let concreteArg =
-                            Scope.lookupValue name scope
-                            |> Option.defaultValue concreteArg
-                    
-                        checkArgMatch ruleArg concreteArg argBindings
-                    | _ ->
-                        checkArgMatch ruleArg concreteArg argBindings
-                | None -> None
-            ) (Some Map.empty)
-        
-        let isMatch, argBindings =
-            match rawArgBindings with
-            | Some bindings -> true, bindings
-            | None -> false, Map.empty
-
-        let subScope = { scope with values = argBindings  }
-        
-        match trace with
-        | All | RuleOnly | OnlyTrue ->
-            let rule = Predicate(ruleFunctor, outerArgs, substituteVarsInGoal subScope ruleGoal)
-            
-            match trace with
-            | All | RuleOnly ->
-                let isMatch = if isMatch then "true" else "false"
-                print depth $"%s{Predicate.toString rule} ? %s{isMatch}"
-            | OnlyTrue -> if isMatch then print depth $"%s{Predicate.toString rule}"
-            | NoDebugInfo -> ()
-        | OnlyTrue | NoDebugInfo -> ()
-
-        // If the rule matches then we need to try and prove the rule's goal.
-        if isMatch then            
-            match tryProveGoal {
-                depth = depth + 1
-                debugLevel = trace
-                
-                goal = ruleGoal
-
-                scope = subScope
-                
-                seenGoals = seenGoals
-                seenFunctions = seenFunctions 
-                stack = (GoalFrame ruleGoal) :: stack 
-            } with
-            | Some newBindings ->
-                let newBindings =
-                    match newBindings with
-                    | [] -> [ Map.empty ]
-                    | _ -> newBindings
-                
-                newBindings
-                |> List.map (fun bindingGroup ->
-                    // If the goal is proven, then we need to grab all variables or values from the inner scope and copy over the value or the value the variable points to the outer scope.
-                    argPairs
-                    |> List.choose (fun (ruleArg, outerArg) ->
-                        match outerArg, ruleArg with
-                        | Variable name, Variable innerName ->
-                            bindingGroup |> Map.tryFind innerName
-                            |> Option.map (fun value -> name, value)
-                        | Variable name, _ -> Some (name, ruleArg)
-                        | _ -> None
-                    )
-                    |> Map.ofList
-                )
-                |> Some
-            | None -> None
-        else
-            None
-    let rec tryProveGoal args: Map<string, PrologExpression> list option =
-        let {
-            depth = depth
+    | NegatedGoal subGoal ->
+        let provability = tryProveGoal (subGoal, {
+            depth = depth + 1
             debugLevel = debugLevel
             
-            goal = goal
-            
             scope = scope
             
-            seenGoals = seenGoals
-            seenFunctions = seenFunctions
-            stack = stack
-        } = args
+            seenGoals = seenGoals 
+            seenFunctions = seenFunctions 
+            stack = (GoalFrame goal) :: stack
+        })
         
-        match debugLevel with
-        | All ->
-            match goal with
-            | DirectGoal ("true", []) -> ()
-            | DirectGoal ("false", []) -> ()
-            | _ ->
-                let printGoal = substituteVarsInGoal scope goal
-                print depth (Goal.toString printGoal)
-        | _ -> ()
-        
-        let expandedGoal = substituteVarsInGoal scope goal
-        
-        match goal with
-        | DirectGoal ("true", []) -> Some [ Map.empty ]
-        | DirectGoal ("false", []) -> None
-
-        | DirectGoal (functor, args) ->
-            let key = (functor, args.Length)
-            let predicates = Scope.lookupPredicates key scope
-            
-            evalArgs {
+        Option.invert [] provability
+    
+    | ConjunctionGoal (a, b) ->
+        let provabilityA = tryProveGoal (a, {
+            context with
                 depth = depth + 1
-                debugLevel = debugLevel
-                scope = scope
-                
-                seenGoals = seenGoals
-                seenFunctions = seenFunctions 
-                stack = (GoalFrame goal) :: stack 
-            } args
-            |> List.choose (fun args ->
-                if seenGoals |> Set.contains (functor, args) then
-                    None
-                else        
-                    let success, bindings =
-                        predicates
-                        |> Array.fold (fun (success, existingBindings) predicate ->
-                            match predicate with
-                            | Choice1Of2 userPredicate ->
-                                let ruleArgs = {
-                                    depth = depth + 1
-                                    debugLevel = debugLevel
-                                    
-                                    currentGoal = (functor, args)
-                                    scope = scope
-                                    
-                                    predicate = userPredicate
-                                    
-                                    seenGoals = seenGoals |> Set.add (functor, args)
-                                    seenFunctions = seenFunctions 
-                                    stack = (GoalFrame expandedGoal) :: stack 
-                                }
-
-                                match testRule ruleArgs with
-                                | Some newBindings ->
-                                    (true, List.append newBindings existingBindings)
-                                | None ->
-                                    (success, existingBindings)
-                                
-                            | Choice2Of2 nativePredicate ->
-                                let context: InterpreterContext = {
-                                    depth = depth + 1
-                                    debugLevel = debugLevel
-                                    
-                                    stack = (GoalFrame goal) :: stack
-                                    
-                                    seenGoals = seenGoals |> Set.add (functor, args)
-                                    seenFunctions = seenFunctions
-                                    scope = scope
-                                }
-
-                                try
-                                    match nativePredicate context args with
-                                    | Some bindings ->
-                                        (true, List.append bindings existingBindings)
-                                    | None ->
-                                        (success, existingBindings)
-                                with
-                                | :? PrologException -> reraise()
-                                | error ->
-                                    raise (PrologException(error.Message, stack, error))
-                        ) (false, [])
-                    
-                    if success then Some bindings else None
-            )
-            |> List.collect id
-            |> List.noneIfEmpty
-        | DynamicGoal (var, goalArgs) ->
-            match Scope.lookupValue var scope with
-            | Some (Atom name) ->
-                tryProveGoal { args with depth = depth + 1; goal = DirectGoal(name, goalArgs) }
-               
-            | Some _ ->
-                let message = "Can't perform a dynamic predicate invocation against a variable bound to something other than an atom!"
-                raise (PrologException(message, stack, InvalidOperationException(message)))
-                
-            | None ->
-                raise (UnboundVariableException(var, stack))
-        
-        | NegatedGoal subGoal ->
-            let provability = tryProveGoal {
-                depth = depth + 1
-                debugLevel = debugLevel
-                
-                goal = subGoal
-                scope = scope
-                
-                seenGoals = seenGoals 
-                seenFunctions = seenFunctions 
                 stack = (GoalFrame goal) :: stack
-            }
-            
-            Option.invert [] provability
+        })
         
-        | ConjunctionGoal (a, b) ->
-            let provabilityA = tryProveGoal {
-                depth = depth + 1
-                debugLevel = debugLevel
+        match provabilityA with
+        | Some bindingsA ->
+            let results = [
+                let bindingsA =
+                    match bindingsA with
+                    | [] -> [ Map.empty ]
+                    | _ -> bindingsA
                 
-                goal = a
-                scope = scope
-                
-                seenGoals = seenGoals 
-                seenFunctions = seenFunctions
-                stack = (GoalFrame goal) :: stack
-            }
-            
-            match provabilityA with
-            | Some bindingsA ->
-                let results = [
-                    let bindingsA =
-                        match bindingsA with
-                        | [] -> [ Map.empty ]
-                        | _ -> bindingsA
-                    
-                    for bindingSetA in bindingsA do
-                        let provabilityB = tryProveGoal {
+                for bindingSetA in bindingsA do
+                    let provabilityB = tryProveGoal (b, {
+                        context with
                             depth = depth + 1
-                            debugLevel = debugLevel
-                            
-                            goal = b
-                            scope = { scope with values = Map.merge bindingSetA scope.values }
-                            
-                            seenGoals = seenGoals 
-                            seenFunctions = seenFunctions
+                            scope = { scope with values = Map.merge scope.values bindingSetA }
                             stack = (GoalFrame expandedGoal) :: stack
-                        }
-                        
-                        match provabilityB with
-                        | Some bindingsB ->
-                            yield bindingsB |> List.map (Map.merge bindingSetA)
-                        | None -> ()
-                ]
-                
-                match results with
-                | [] -> None
-                | _ ->
-                    results
-                    |> List.collect id
-                    |> Some
-            | None ->
-                None
-
-        | DisjunctionGoal (a, b) ->
-            let provability = tryProveGoal {
-                depth = depth + 1
-                debugLevel = debugLevel
-                
-                goal = a
-                scope = scope
-
-                seenGoals = seenGoals 
-                seenFunctions = seenFunctions
-                stack = (GoalFrame expandedGoal) :: stack
-            }
+                    })
+                    
+                    match provabilityB with
+                    | Some bindingsB ->
+                        yield bindingsB |> List.map (Map.merge bindingSetA)
+                    | None -> ()
+            ]
             
-            match provability with
-            | Some _ -> provability
-            | None ->
-                tryProveGoal {
-                    depth = depth + 1
-                    debugLevel = debugLevel
-                    
-                    goal = b
-                    scope = scope
-                    
-                    seenGoals = seenGoals 
-                    seenFunctions = seenFunctions
-                    stack = (GoalFrame expandedGoal) :: stack
-                }
+            match results with
+            | [] -> None
+            | _ ->
+                results
+                |> List.collect id
+                |> Some
+        | None ->
+            None
 
-/// Query whether a given goal is true or false.
+    | DisjunctionGoal (a, b) ->
+        let provability = tryProveGoal (a, {
+            context with
+                depth = depth + 1
+                stack = (GoalFrame expandedGoal) :: stack
+        })
+        
+        match provability with
+        | Some _ -> provability
+        | None ->
+            tryProveGoal (b, {
+                context with
+                    depth = depth + 1
+                    stack = (GoalFrame expandedGoal) :: stack
+            })
+
+/// Query whether a given goal is provable or not.
 let rec query (goal: Goal) (scope: Scope) (trace: DebugLevel): Map<string, PrologExpression> list option =
-    Internal.tryProveGoal {
+    tryProveGoal (goal, {
         depth = 0
         debugLevel = trace
-        goal = goal
         scope = scope
          
         seenGoals = Set.empty
         seenFunctions = Set.empty
         stack = [] 
-    }
+    })
