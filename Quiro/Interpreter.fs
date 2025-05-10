@@ -103,44 +103,63 @@ let rec private substituteVariablesInExpression (scope: Scope) (expr: PrologExpr
 
 // CONTINUE
 
-let rec private checkArgMatch ruleArg concreteArg argBindings =
-    match ruleArg with
-    | Variable ruleVar ->
-        match concreteArg with
-        | Variable _ -> Some argBindings
+/// Determines if the specified value matches the given argument pattern, collecting any resulting input bindings into the provided `computedBindings`.
+/// The given context is used when needing to throw an error regarding insufficient substantiation.
+let rec private checkIfValueMatchesArgument term (context: InterpreterContext) computedBindings argument value =
+    match argument with
+    // If the argument is a variable, then either we should bind the concrete value, or the "value" is itself a variable,
+    // in which case we don't want to bind it until later when we are collecting outputs from a predicate.
+    | Variable argumentAsAVariable ->
+        // If a variable name is an underscore, then it is actually a wildcard.
+        // If the value is also a variable, that is, is expecting output, then the term is insufficiently substantiated.
+        // Otherwise, pass along success with no additional bindings.
+        match argumentAsAVariable with
+        | "_" ->
+            match value with
+            | Variable _ ->
+                raise (InsufficientSubstantiationException(term, context.stack))
+            | _ ->
+                Some computedBindings
         | _ ->
-            Some (argBindings |> Map.add ruleVar concreteArg)
-        
-    | ListCons (ruleHead, ruleTail) ->
-        match concreteArg with
-        | ListTerm (concreteHead :: concreteTail) ->
-            match checkArgMatch ruleHead concreteHead argBindings with
+            match value with
+            | Variable _ -> Some computedBindings
+            | _ ->
+                Some (computedBindings |> Map.add argumentAsAVariable value)
+    
+    // For lists pattern matching, either the value is a list or it is not, and if it is a list, we need to recursively check for any pattern matching in the head and tail of the expression.
+    | ListCons (argumentHead, argumentTail) ->
+        match value with
+        | ListTerm (valueHead :: valueTail) ->
+            match checkIfValueMatchesArgument term context computedBindings argumentHead valueHead with
             | Some argBindings ->
-                checkArgMatch ruleTail (ListTerm concreteTail) argBindings
+                checkIfValueMatchesArgument term context argBindings argumentTail (ListTerm valueTail)
             | None -> None
         | _ ->
             None
 
-    | ListTerm ruleTerms ->
-        match concreteArg with
-        | ListTerm concreteTerms ->
-            if ruleTerms.Length <> concreteTerms.Length then
+    // For whole list patterns, we need an equally sized list as an input and when we get one we need to recursively check each entry of the argument for pattern matching.
+    | ListTerm argumentItems ->
+        match value with
+        | ListTerm valueItems ->
+            if argumentItems.Length <> valueItems.Length then
                 None
             else
-                List.zip ruleTerms concreteTerms
+                List.zip argumentItems valueItems
                 |> List.fold (fun argBindings (ruleTerm, concreteTerm) ->
                     match argBindings with
                     | Some argBindings ->
-                        checkArgMatch ruleTerm concreteTerm argBindings
+                        checkIfValueMatchesArgument term context argBindings ruleTerm concreteTerm
                     | None -> None
-                ) (Some argBindings)
+                ) (Some computedBindings)
         | _ ->
             None
+    
+    // For all other cases, simply ensure that either a: the value being tested is an output var or b: the value being tested matches the value provided as an argument pattern.
     | _ ->
-        match concreteArg with
-        | Variable _ -> Some argBindings
+        match value with
+        | Variable _ -> Some computedBindings
         | _ ->
-            if ruleArg = concreteArg then Some argBindings else None
+            if argument = value then Some computedBindings else None
 
 let rec evalArgs (context: InterpreterContext) args : PrologExpression list list =
     match args with
@@ -170,8 +189,8 @@ let rec evalArgs (context: InterpreterContext) args : PrologExpression list list
         )
         |> List.collect id
 
-let private testFunction args : (PrologExpression * Map<string, PrologExpression>) list option =
-    let ((functor, callArgs), func, {
+let private testFunction ((functor, callArgs), func, context) : (PrologExpression * Map<string, PrologExpression>) list option =
+    let {
         depth = depth
         debugLevel = trace
         
@@ -180,7 +199,7 @@ let private testFunction args : (PrologExpression * Map<string, PrologExpression
         seenGoals = seenGoals
         seenFunctions = seenFunctions
         stack = stack
-    }) = args
+    } = context
     
     let (Function(_, funcArgs, body)) = func
     let argPairs = List.zip funcArgs callArgs
@@ -192,7 +211,7 @@ let private testFunction args : (PrologExpression * Map<string, PrologExpression
         |> List.fold (fun argBindings (funcArg, concreteArg) ->
             match argBindings with
             | Some argBindings ->
-                checkArgMatch funcArg concreteArg argBindings
+                checkIfValueMatchesArgument functor context argBindings funcArg concreteArg
             | None -> None
         ) (Some Map.empty)
     let isMatch, argBindings =
@@ -296,7 +315,7 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
                 | ListTerm tail ->
                     ListTerm (head :: tail), (Map.merge headVars tailVars)
                 | _ ->
-                    ListTerm ([ head; tail ]), (Map.merge headVars tailVars)
+                    ListTerm [ head; tail ], (Map.merge headVars tailVars)
             )
         )
         |> List.collect id
@@ -401,7 +420,7 @@ let evaluateExpr (expr, context) : (PrologExpression * Map<string, PrologExpress
             raise (UnboundVariableException(var, stack))
 
 /// Tests a rule against a goal to see if it matches, creating a table of any required bindings when it does.
-let private testRule (((_, outerArgs), predicate, context): RuleInterpreterContext) : Map<string, PrologExpression> list option =
+let private testRule (((predicateHead, outerArgs), predicate, context): RuleInterpreterContext) : Map<string, PrologExpression> list option =
     let (Predicate(ruleFunctor, ruleArgs, ruleGoal)) = predicate
     let {
         depth = depth
@@ -429,9 +448,9 @@ let private testRule (((_, outerArgs), predicate, context): RuleInterpreterConte
                         Scope.lookupValue name scope
                         |> Option.defaultValue concreteArg
                 
-                    checkArgMatch ruleArg concreteArg argBindings
+                    checkIfValueMatchesArgument predicateHead context argBindings ruleArg concreteArg
                 | _ ->
-                    checkArgMatch ruleArg concreteArg argBindings
+                    checkIfValueMatchesArgument predicateHead context argBindings ruleArg concreteArg
             | None -> None
         ) (Some Map.empty)
     
