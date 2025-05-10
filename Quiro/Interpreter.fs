@@ -118,7 +118,8 @@ module rec Internal =
     let rec private substituteVarsInExpr (scope: Scope) (expr: PrologExpression) =
         match expr with
         | Atom _
-        | Number _ -> expr
+        | Number _
+        | Text _ -> expr
         
         | ListTerm values ->
             ListTerm (values |> List.map (substituteVarsInExpr scope))
@@ -303,7 +304,8 @@ module rec Internal =
         
         | Atom _
         | Number _
-        | ListTerm _ ->
+        | ListTerm _
+        | Text _ ->
             [ expr, Map.empty ]
 
         | ListCons (head, tail) ->

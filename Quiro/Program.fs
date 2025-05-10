@@ -56,24 +56,7 @@ let main args =
 
                         for bindingGroup in bindings do
                             for KeyValue(variable, value) in bindingGroup do
-                                match value with
-                                | ListTerm values ->
-                                    let isText = values |> List.forall(function | Number (Float v) -> v.DecimalPlaces <= 0 | _ -> false)
-                                    
-                                    if isText then
-                                        let text =
-                                            values
-                                            |> List.map (function | Number n -> n.ToCharacter() | _ -> ' ')
-                                            |> List.toArray
-                                            |> String
-                                            |> _.Replace("\\", "\\\\").Replace("\"", "\\\"")
-
-                                        printfn $"%s{variable} = \"%s{text}\""
-                                    else
-                                        printfn $"%s{variable} = %s{PrologExpression.toString value}"
-
-                                | _ ->
-                                    printfn $"%s{variable} = %s{PrologExpression.toString value}"
+                                printfn $"%s{variable} = %s{PrologExpression.toString value}"
 
                             if bindingGroup.Count > 1 then
                                 printfn ""  
