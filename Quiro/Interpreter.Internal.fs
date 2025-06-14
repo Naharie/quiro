@@ -219,7 +219,7 @@ let tryProvePredicate (context: InterpreterContext) predicate argValues =
 let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
     match goal with
     | SimpleGoal (("true" | "repeat" | "!"), []) -> ValueSome emptySuccess
-    | SimpleGoal ("false", []) -> ValueNone
+    | SimpleGoal (("false" | "fail"), []) -> ValueNone
 
     | SimpleGoal (functor, argValues) ->
         let key = (functor, argValues.Length)
@@ -256,4 +256,13 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
         | ValueNone -> ValueSome emptySuccess
         
     | ConjunctionGoal goals -> TODO
-    | DisjunctionGoal goals -> TODO
+    
+    | DisjunctionGoal goals ->
+        let mutable result = ValueNone
+        let mutable index = 0
+        
+        while index < goals.Length && result.IsNone do
+            result <- tryProveGoal context goals[index]
+            index <- index + 1
+
+        result

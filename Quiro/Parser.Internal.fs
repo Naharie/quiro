@@ -46,13 +46,11 @@ let goalAST parser =
 // Expressions
 
 let invalidAtomSymbols = Set.ofList [ '['; ']'; '('; ')'; '{'; '}'; ','; ';'; '.'; '?'; '_'  ]
-let atomExpr, atomParser =
-    let letter = satisfy Char.IsLower
-    
+let atomExpr, atomParser =    
     let isSymbol char = Char.IsSymbol char || Char.IsPunctuation char
     let symbols = satisfy (fun char -> isSymbol char && (invalidAtomSymbols |> Set.contains char |> not))
-    
-    let headChar = letter
+
+    let headChar = lower
     let bodyChar = letter <|> symbols <|> digit
     
     let unescapedChar = noneOf [ '\\'; '\'' ]
@@ -116,7 +114,7 @@ let placeholderExpr = placeholder >>. preturn ExprPlaceholder |> exprAST
 let placeholderGoal = placeholder >>. preturn GoalPlaceholder |> goalAST
 
 let variableExpr, variableParser =
-    let headChar = satisfy Char.IsUpper <|> pchar '_'
+    let headChar = upper <|> pchar '_'
     let bodyChar = letter <|> digit
     
     let variableParser: _ Parser =
