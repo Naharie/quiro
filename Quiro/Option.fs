@@ -1,8 +1,0 @@
-// These utilities are taken from my library Functional which can be found on my GitHub profile.
-module Quiro.Option
-
-/// Inverts the specified option, flipping Some to None and None to Some, filling in the specified fallback value in the latter case.
-let invert fallback option =
-    match option with
-    | Some _ -> None
-    | None -> Some fallback

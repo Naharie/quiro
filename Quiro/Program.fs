@@ -1,14 +1,13 @@
 ﻿open System
 open System.IO
-open System.Runtime.InteropServices.JavaScript
 open Quiro
-open Quiro.DataTypes
-
-// TODO: Allow cuts (func(x, y) -> a, b, !, c) where only c is returned.
 
 [<EntryPoint>]
 let main args =
-    let mutable scope = Scope.defaultScope
+    // https://en.wikipedia.org/wiki/Prolog_syntax_and_semantics
+    
+    //let mutable scope = Scope.defaultScope
+    let mutable scope = StoredTerms.emptyTerms()
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
@@ -29,14 +28,18 @@ let main args =
                 false, false, raw
 
         if String.IsNullOrWhiteSpace code then ()
+        elif code.StartsWith ".toggle" then
+            Parser.setLanguageServerMode (Parser.isInLanguageServerMode() |> not)
         elif code.StartsWith ".load " then
             try
-                let scriptCode = File.ReadAllText (code[6..].Trim('\'', '"'))
+                let path = code[6..].Trim('\'', '"')
+                let fileName = Path.GetFileName path
+                let scriptCode = File.ReadAllText path
                 
-                match Parser.parseScript scriptCode with
+                match Parser.parseScript fileName scriptCode with
                 | Ok declarations ->
                     for declaration in declarations do
-                        scope <- Interpreter.storeDeclaration declaration scope
+                        Interpreter.storeDeclaration declaration.decKind scope
                     
                 | Error parseError ->
                     printfn $"%s{parseError}"
@@ -44,33 +47,35 @@ let main args =
             | err ->
                 printfn $"%O{err}"
         elif isQuery then
-            match Parser.parseGoal code with
-            | Ok goal ->
+            match Parser.parseGoal "<repl>" code with
+            | Ok goalAST ->
                 let debugLevel = if printDebugInfo then RuleOnly else NoDebugInfo
+                let goal = Interpreter.Internal.reifyGoal goalAST
                 
                 try
                     match Interpreter.query goal scope debugLevel with
-                    | Some bindings ->
+                    | ValueSome bindings ->
                         printfn "Yes"
                         if bindings.Length > 1 then printfn ""
 
                         for bindingGroup in bindings do
                             for KeyValue(variable, value) in bindingGroup do
-                                printfn $"%s{variable} = %s{PrologExpression.toString value}"
+                                printfn $"%s{variable} = %s{PrologValue.toString value}"
 
                             if bindingGroup.Count > 1 then
                                 printfn ""  
 
-                    | None -> printfn "No\r\n"
+                    | ValueNone -> printfn "No\r\n"
                 with
                 | :? PrologException as error ->
                     printfn $"%O{error}"
+
             | Error message ->
                 printfn $"%s{message}"
         else
-            match Parser.parseDeclaration code with
+            match Parser.parseDeclaration "<repl>" code with
             | Ok declaration ->
-                scope <- Interpreter.storeDeclaration declaration scope
+                Interpreter.storeDeclaration declaration scope
                 printfn "Stored"
             | Error message ->
                 printfn $"%s{message}"

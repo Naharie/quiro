@@ -7,14 +7,21 @@
     </PropertyGroup>
 
     <ItemGroup>
-        <Compile Include="Option.fs" />
+        <Compile Include="Dictionary.fs" />
+        <Compile Include="ActivePatterns.fs" />
         <Compile Include="Map.fs" />
-        <Compile Include="List.fs" />
-        <Compile Include="Number.fs" />
-        <Compile Include="DataTypes.fs" />
-        <Compile Include="Parser.fs" />
-        <Compile Include="Interpreter.fs" />
+        <Compile Include="BigFloat.fs" />
+        <Compile Include="AST.fs" />
+        <Compile Include="PrologValue.fs" />
+        <Compile Include="StackFrame.fs" />
+        <Compile Include="PrologException.fs" />
         <Compile Include="Scope.fs" />
+        <Compile Include="InterpreterContext.fs" />
+        <Compile Include="Parser.Internal.fs" />
+        <Compile Include="Parser.fs" />
+        <Compile Include="Interpreter.Internal.fs" />
+        <Compile Include="Interpreter.fs" />
+        <Compile Include="BuiltinTerms.fs" />
         <Compile Include="Program.fs"/>
     </ItemGroup>
 
