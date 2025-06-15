@@ -50,7 +50,7 @@ let atomExpr, atomParser =
     let isSymbol char = Char.IsSymbol char || Char.IsPunctuation char
     let symbols = satisfy (fun char -> isSymbol char && (invalidAtomSymbols |> Set.contains char |> not))
 
-    let headChar = lower
+    let headChar = lower <|> symbols
     let bodyChar = letter <|> symbols <|> digit
     
     let unescapedChar = noneOf [ '\\'; '\'' ]

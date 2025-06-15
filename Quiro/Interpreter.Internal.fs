@@ -255,7 +255,77 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
         | ValueSome _ -> ValueNone
         | ValueNone -> ValueSome emptySuccess
         
-    | ConjunctionGoal goals -> TODO
+    | ConjunctionGoal goals ->
+        // Note: "repeat" choice points and cuts "!"
+        
+        let workingSets = Stack()
+        let results = ResizeArray()
+        
+        let rec processGoal bindingSets current nextIndex =
+            let newBindingSets =
+                bindingSets
+                |> Array.collect (fun bindingSet ->
+                    let contextWithUpdatedBindings = context.NestScope bindingSet
+                    
+                    tryProveGoal contextWithUpdatedBindings current
+                    |> ValueOption.defaultValue Array.empty
+                    |> Array.map (Map.merge bindingSet)
+                )
+
+            if nextIndex >= goals.Length then
+                if newBindingSets.Length = 0 then ValueNone else ValueSome newBindingSets
+            else
+                processGoal newBindingSets goals[nextIndex] (nextIndex + 1)
+            
+        if goals.Length = 1 then
+            tryProveGoal context goals[0]
+        else
+            workingSets.Push ([| Map.empty |], 0, 0)
+            
+            while workingSets.Count > 0 do
+                let bindingSets, goalIndex, setIndex = workingSets.Peek()
+                
+                if setIndex < bindingSets.Length then
+                    let bindingSet = bindingSets[setIndex]
+                    let goal = goals[goalIndex]
+                    
+                    match goal with
+                    // A cut means we immediately discard all choice points
+                    | SimpleGoal("!", []) ->
+                        let temporary = Stack()
+                        
+                        while workingSets.Count > 0 do
+                            let b, g, _ = workingSets.Pop()
+                            temporary.Push((b, g, b.Length))
+                        
+                        while temporary.Count > 0 do
+                            workingSets.Push(temporary.Pop())
+
+                        if goalIndex + 1 < goals.Length then
+                            workingSets.Pop() |> ignore
+                            workingSets.Push ([| bindingSets[setIndex] |], goalIndex + 1, 0)
+                    | _ ->
+                        let contextWithUpdatedBindings = context.NestScope bindingSet
+                        let potentialGoalResults = tryProveGoal contextWithUpdatedBindings goal
+                        
+                        workingSets.Pop() |> ignore
+                        workingSets.Push (bindingSets, goalIndex, setIndex + 1)
+                        
+                        match potentialGoalResults with
+                        | ValueSome goalResults ->
+                            let newBindingSets =
+                                goalResults
+                                |> Array.map (Map.merge bindingSet)
+
+                            if goalIndex + 1 >= goals.Length then
+                                results.AddRange(ReadOnlySpan(newBindingSets))
+                            else
+                                workingSets.Push (newBindingSets, goalIndex + 1, 0)
+                        | ValueNone -> ()
+                else
+                    workingSets.Pop() |> ignore
+
+            if results.Count = 0 then ValueNone else ValueSome (results.ToArray())
     
     | DisjunctionGoal goals ->
         let mutable result = ValueNone

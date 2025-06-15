@@ -6,8 +6,13 @@ open Quiro
 let main args =
     // https://en.wikipedia.org/wiki/Prolog_syntax_and_semantics
     
-    //let mutable scope = Scope.defaultScope
-    let mutable scope = StoredTerms.emptyTerms()
+    let mutable terms = StoredTerms.emptyTerms()
+    
+    terms.nativePredicates[("print", 1)] <- ResizeArray()
+    terms.nativePredicates[("print", 1)].Add (fun _ args ->
+        Console.WriteLine(PrologValue.toString args[0])
+        ValueSome [| Map.empty |]
+    )
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
@@ -39,7 +44,7 @@ let main args =
                 match Parser.parseScript fileName scriptCode with
                 | Ok declarations ->
                     for declaration in declarations do
-                        Interpreter.storeDeclaration declaration.decKind scope
+                        Interpreter.storeDeclaration declaration.decKind terms
                     
                 | Error parseError ->
                     printfn $"%s{parseError}"
@@ -53,7 +58,7 @@ let main args =
                 let goal = Interpreter.Internal.reifyGoal goalAST
                 
                 try
-                    match Interpreter.query goal scope debugLevel with
+                    match Interpreter.query goal terms debugLevel with
                     | ValueSome bindings ->
                         printfn "Yes"
                         if bindings.Length > 1 then printfn ""
@@ -75,7 +80,7 @@ let main args =
         else
             match Parser.parseDeclaration "<repl>" code with
             | Ok declaration ->
-                Interpreter.storeDeclaration declaration scope
+                Interpreter.storeDeclaration declaration terms
                 printfn "Stored"
             | Error message ->
                 printfn $"%s{message}"
