@@ -259,23 +259,8 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
         // Note: "repeat" choice points and cuts "!"
         
         let workingSets = Stack()
+        let repeats = Stack()
         let results = ResizeArray()
-        
-        let rec processGoal bindingSets current nextIndex =
-            let newBindingSets =
-                bindingSets
-                |> Array.collect (fun bindingSet ->
-                    let contextWithUpdatedBindings = context.NestScope bindingSet
-                    
-                    tryProveGoal contextWithUpdatedBindings current
-                    |> ValueOption.defaultValue Array.empty
-                    |> Array.map (Map.merge bindingSet)
-                )
-
-            if nextIndex >= goals.Length then
-                if newBindingSets.Length = 0 then ValueNone else ValueSome newBindingSets
-            else
-                processGoal newBindingSets goals[nextIndex] (nextIndex + 1)
             
         if goals.Length = 1 then
             tryProveGoal context goals[0]
@@ -284,8 +269,12 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
             
             while workingSets.Count > 0 do
                 let bindingSets, goalIndex, setIndex = workingSets.Peek()
-                
-                if setIndex < bindingSets.Length then
+                let repeatIndex, repeatCount = if repeats.Count > 0 then repeats.Peek() else -1, -1
+
+                if setIndex >= bindingSets.Length && repeatIndex = goalIndex - 1 && results.Count = repeatCount then
+                    workingSets.Pop() |> ignore
+                    workingSets.Push (bindingSets, goalIndex, 0)
+                elif setIndex < bindingSets.Length then
                     let bindingSet = bindingSets[setIndex]
                     let goal = goals[goalIndex]
                     
@@ -304,6 +293,14 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
                         if goalIndex + 1 < goals.Length then
                             workingSets.Pop() |> ignore
                             workingSets.Push ([| bindingSets[setIndex] |], goalIndex + 1, 0)
+                            
+                    | SimpleGoal("repeat", []) ->
+                        repeats.Push(goalIndex, results.Count)
+                        
+                        if goalIndex + 1 < goals.Length then
+                            workingSets.Pop() |> ignore
+                            workingSets.Push (bindingSets, goalIndex + 1, 0)
+                            
                     | _ ->
                         let contextWithUpdatedBindings = context.NestScope bindingSet
                         let potentialGoalResults = tryProveGoal contextWithUpdatedBindings goal
