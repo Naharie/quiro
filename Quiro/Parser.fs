@@ -10,7 +10,7 @@ let isInLanguageServerMode() = isLanguageServerMode
 let setLanguageServerMode status = isLanguageServerMode <- status
 
 let parseExpression file text =
-    match runParserOnString noChainingExpr () file text with
+    match runParserOnString expr () file text with
     | Success(result, _, _) -> Result.Ok result
     | Failure(message, _, _) -> Result.Error message
 

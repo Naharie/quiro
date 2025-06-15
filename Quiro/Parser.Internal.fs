@@ -42,16 +42,19 @@ let exprAST parser =
 let goalAST parser =
     pos .>>. parser |>> fun (location, kind) ->
         { goalKind = kind; location = location }
+let dcgAST parser =
+    pos .>>. parser |>> fun (location, kind) ->
+        { dcgKind = kind; location = location }
 
 // Expressions
 
-let invalidAtomSymbols = Set.ofList [ '['; ']'; '('; ')'; '{'; '}'; ','; ';'; '.'; '?'; '_'  ]
+let invalidAtomSymbols = Set.ofList [ '['; ']'; '('; ')'; '{'; '}'; ','; ';'; '.'; '?'  ]
 let atomExpr, atomParser =    
     let isSymbol char = Char.IsSymbol char || Char.IsPunctuation char
-    let symbols = satisfy (fun char -> isSymbol char && (invalidAtomSymbols |> Set.contains char |> not))
+    let symbols allowUnderScore = satisfy (fun char -> isSymbol char && (allowUnderScore || char <> '_') && (invalidAtomSymbols |> Set.contains char |> not))
 
-    let headChar = lower <|> symbols
-    let bodyChar = letter <|> symbols <|> digit
+    let headChar = lower <|> symbols false
+    let bodyChar = letter <|> symbols true <|> digit
     
     let unescapedChar = noneOf [ '\\'; '\'' ]
     let escapedChar = skipChar '\\' >>. anyOf [ '\\'; '\'' ]
@@ -105,8 +108,7 @@ let textExpr: _ Parser =
     <?> "string"
     |> exprAST
 
-let noChainingExpr, noChainingExprRef = createParserForwardedToRef() : Parser<PrologExprAST> * Parser<PrologExprAST> ref
-let chainingExpr, chainingExprRef = createParserForwardedToRef() : Parser<PrologExprAST> * Parser<PrologExprAST> ref
+let expr, exprRef = createParserForwardedToRef() : Parser<PrologExprAST> * Parser<PrologExprAST> ref
 
 let placeholder : _ Parser =
     eof <|> lookAhead (newline .>>. newline |>> ignore) >>= allowIfLanguageServer
@@ -127,18 +129,19 @@ let variableExpr, variableParser =
     
     variableExpression, variableParser
 
-let listExpression: _ Parser =
+let listParser, listExpression: _ Parser * _ Parser =
     let startList = skipChar '['
     let endList = (skipChar ']' <|> placeholder)
     let separator = skipChar ','
     
-    between startList endList (sepBy noChainingExpr separator)
-    |>> ExprListTerm
-    <?> "list"
-    |> exprAST
+    let listParser =
+        between startList endList (sepBy expr separator)
+        <?> "list"
+    
+    listParser, exprAST (listParser |>> ExprListTerm)
 
 let listConsExpr: _ Parser =
-    skipChar '[' >>. ws >>. noChainingExpr .>> ws .>> skipChar '|' .>> ws .>>. noChainingExpr .>> ws .>> (skipChar ']' <|> placeholder)
+    skipChar '[' >>. ws >>. expr .>> ws .>> skipChar '|' .>> ws .>>. expr .>> ws .>> (skipChar ']' <|> placeholder)
     |>> ExprListCons
     <?> "list cons"
     |> exprAST
@@ -148,7 +151,7 @@ let termOrAtom: _ Parser =
     let endArgs = (skipChar ')' <|> placeholder)
     let separator = skipChar ','
     
-    atomParser .>>. opt (between startArgs endArgs (sepBy noChainingExpr separator))
+    atomParser .>>. opt (between startArgs endArgs (sepBy expr separator))
 let termOrAtomExpr: _ Parser =
     termOrAtom
     |>> fun (functor, args) ->
@@ -159,15 +162,11 @@ let termOrAtomExpr: _ Parser =
 
 let goal, goalRef = createParserForwardedToRef() : Parser<PrologGoalAST> * Parser<PrologGoalAST> ref
 
-let parenExpr = skipChar '(' >>. ws >>. chainingExpr .>> ws .>> (skipChar ')' <|> placeholder)
-let goalExpr =
-    skipChar '{' >>. ws >>. goal .>> ws .>> skipChar '}' |>> ExprGoal
-    |> exprAST
+let parenExpr = skipChar '(' >>. ws >>. expr .>> ws .>> (skipChar ')' <|> placeholder)
 
-let expressionWithChaining = OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>()
-let expressionWithoutChaining = OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>()
+let expression = OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>()
 
-let addExpressionOperators (allowChaining: bool) (operatorExpression: OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>) =
+let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>) =
     let op name precedence =
         let opPos =
             getPosition
@@ -182,9 +181,6 @@ let addExpressionOperators (allowChaining: bool) (operatorExpression: OperatorPr
         operatorExpression.AddOperator(InfixOperator(name, opPos, precedence, Associativity.Left, (), fun pos a b ->
             { exprKind = ExprTerm(name, [ a; b ]); location = pos }))
     
-    if allowChaining then
-        op "," 100
-
     op "+" 200
     op "-" 200
 
@@ -197,7 +193,7 @@ let addExpressionOperators (allowChaining: bool) (operatorExpression: OperatorPr
     op "**" 400
     op "^" 400
 
-expressionWithChaining.TermParser <- ws >>. choice [
+expression.TermParser <- ws >>. choice [
     parenExpr
     variableExpr
     termOrAtomExpr
@@ -206,27 +202,25 @@ expressionWithChaining.TermParser <- ws >>. choice [
     (attempt listConsExpr <|> listExpression)
     placeholderExpr
 ] .>> ws
-expressionWithoutChaining.TermParser <- expressionWithChaining.TermParser
 
-addExpressionOperators true expressionWithChaining
-addExpressionOperators false expressionWithoutChaining
+addExpressionOperators expression
 
-noChainingExprRef.Value <- expressionWithoutChaining.ExpressionParser
-chainingExprRef.Value <- expressionWithChaining.ExpressionParser
+exprRef.Value <- expression.ExpressionParser
 
 // Goals
 
 let comparisonGoal: _ Parser =
     pipe3
-        noChainingExpr
+        expr
         (choice [
             pstring "<"
             pstring "<="
             pstring ">"
             pstring ">="
             (attempt (pstring "=:=") <|> pstring "=")
+            pstring "\="
             pstring "is"
-        ]) noChainingExpr
+        ]) expr
         (fun exprA op exprB -> GoalSimple(op, [ exprA; exprB ]))
     |> goalAST
 let simpleGoal: _ Parser =
@@ -274,10 +268,36 @@ junctionGoal.TermParser <- (choice [
 
 goalRef.Value <- junctionGoal.ExpressionParser
 
+let dcg, dcgRef = createParserForwardedToRef(): Parser<DCGAST> * Parser<DCGAST> ref
+
+let dcgCallOrTerm =
+    termOrAtom
+    |>> fun (term, potentialArgs) ->
+        match potentialArgs with
+        | None -> DCGTerm term
+        | Some args ->
+            DCGCall(term, args)
+    |> dcgAST
+
+let dcgGoal =
+    skipChar '{' >>. ws >>. goal .>> ws .>> skipChar '}' |>> DCGGoal
+    |> dcgAST
+let dcgList = listParser |>> DCGList |> dcgAST
+let dcgSequence =
+    sepBy1 (ws >>. choice [ dcgList; dcgGoal; dcgCallOrTerm ] .>> ws) (skipChar ',')
+    |>> fun terms ->
+        if terms.Length = 1 then
+            terms[0].dcgKind
+        else
+            DCGSequence (List.toArray terms)
+    |> dcgAST
+
+dcgRef.Value <- dcgSequence
+
 let declaration: _ Parser =
     pos .>>. termOrAtom .>> ws .>>. opt (choice [
         skipString ":-" >>. ws >>. goal |>> Choice1Of2
-        skipString "-->" >>. ws >>. chainingExpr |>> Choice2Of2
+        skipString "-->" >>. ws >>. dcg |>> Choice2Of2
     ]) .>> ws .>> skipChar '.'
     |>> fun ((position, (functor, args)), body) ->
         let args = args |> Option.defaultValue List.empty
@@ -288,7 +308,7 @@ let declaration: _ Parser =
              | Choice1Of2 goal ->
                  PredicateDeclaration(functor, args, goal)
              | Choice2Of2 expression ->
-                 FunctionDeclaration(functor, args, expression)
+                 DCGDeclaration(functor, args, expression)
         | None ->
             PredicateDeclaration (functor, args, {
                 goalKind = GoalSimple ("true", List.empty)

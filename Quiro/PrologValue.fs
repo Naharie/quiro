@@ -17,8 +17,6 @@ type PrologValue =
     | Variable of name:string
     // [ Head | Tail ]
     | ListCons of head:PrologValue * tail:PrologValue
-    // { Goal }
-    | GoalExpr of Goal
 
 type Goal =
     // A simple goal is a simple predication such as even(X), where the top level expression does not itself involve subgoals.
@@ -30,6 +28,15 @@ type Goal =
     | ConjunctionGoal of Goal[]
     // The logical or operator; requires at least one of the sub goals to be provable to succeed.
     | DisjunctionGoal of Goal[]
+
+[<RequireQualifiedAccess>]
+type DCG =
+    | Term of string
+    | Call of functor:string * args:PrologValue list
+    // { Goal }
+    | Goal of Goal
+    | List of PrologValue list
+    | Sequence of DCG[]
 
 module PrologValue =
     let rec toString (term: PrologValue) =
@@ -62,8 +69,6 @@ module PrologValue =
                 |> String.concat ", "
             
             $"%s{functor}(%s{args})"
-        | GoalExpr goal ->
-            "{ " + Goal.toString goal + " }"
 
 module Goal =
     let rec toString goal =

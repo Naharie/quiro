@@ -16,7 +16,6 @@ type DebugLevel =
 type InstantiatedCompound = string * PrologValue
 
 type NativePredicate = InterpreterContext -> PrologValue list -> Map<string, PrologValue>[] voption
-type NativeFunction = InterpreterContext -> PrologValue list -> PrologValue[] voption
 
 type InterpreterContext = {
     /// The level of debug information to print out.
@@ -34,9 +33,6 @@ with
 type StoredTerms = {
     userPredicates: Dictionary<string * int, ResizeArray<PrologValue list * Goal>>
     nativePredicates: Dictionary<string * int, ResizeArray<NativePredicate>>
-    
-    userFunctions: Dictionary<string * int, ResizeArray<PrologValue list * PrologValue>>
-    nativeFunctions: Dictionary<string * int, ResizeArray<NativeFunction>>
 }
 
 // Helper modules
@@ -46,10 +42,7 @@ module StoredTerms =
     let emptyTerms () =
         {   
             userPredicates = Dictionary()
-            nativePredicates = Dictionary()
-            
-            userFunctions = Dictionary()
-            nativeFunctions = Dictionary() 
+            nativePredicates = Dictionary() 
         }
     
     let lookupPredicates (scope: StoredTerms) (key: string * int) =
@@ -64,22 +57,6 @@ module StoredTerms =
         let mutable result = Unchecked.defaultof<ResizeArray<_>>
         
         if scope.nativePredicates.TryGetValue(key, &result) then
-            result
-        else
-            ResizeArray()
-   
-    let lookupFunctions (scope: StoredTerms) (key: string * int) =
-        let mutable result = Unchecked.defaultof<ResizeArray<_>>
-        
-        if scope.userFunctions.TryGetValue(key, &result) then
-            result
-        else
-            ResizeArray()
-
-    let lookupNativeFunctions (scope: StoredTerms) (key: string * int) =
-        let mutable result = Unchecked.defaultof<ResizeArray<_>>
-        
-        if scope.nativeFunctions.TryGetValue(key, &result) then
             result
         else
             ResizeArray()

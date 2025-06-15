@@ -15,7 +15,6 @@ type PrologExprASTKind =
     | ExprTerm of target:string * args:PrologExprAST list
     | ExprVariable of name:string
     | ExprListCons of head:PrologExprAST * tail:PrologExprAST
-    | ExprGoal of goal:PrologGoalAST
     | ExprPlaceholder
 
 type PrologExprAST = {
@@ -30,6 +29,18 @@ type PrologGoalASTKind =
     | GoalConjunction of PrologGoalAST[]
     | GoalDisjunction of PrologGoalAST[]
 
+type DCTAstKind =
+    | DCGTerm of string
+    | DCGCall of functor:string * args:PrologExprAST list
+    | DCGGoal of PrologGoalAST
+    | DCGList of PrologExprAST list
+    | DCGSequence of DCGAST[]
+
+type DCGAST = {
+    dcgKind: DCTAstKind
+    location: FileLocation
+}
+
 type PrologGoalAST = {
     goalKind: PrologGoalASTKind
     location: FileLocation
@@ -37,7 +48,7 @@ type PrologGoalAST = {
 
 type DeclarationKind =
     | PredicateDeclaration of functor:string * arguments:PrologExprAST list * goal:PrologGoalAST
-    | FunctionDeclaration of functor:string * arguments:PrologExprAST list * body:PrologExprAST
+    | DCGDeclaration of functor:string * arguments:PrologExprAST list * body:DCGAST
     
 type Declaration = {
     decKind: DeclarationKind

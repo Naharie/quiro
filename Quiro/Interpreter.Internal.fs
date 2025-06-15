@@ -6,8 +6,6 @@ open Functional
 open Quiro
 open Quiro.AST
 
-let TODO<'t> = failwith "TODO" : 't
-
 let rec reifyExpr (ast: PrologExprAST): PrologValue =
     match ast.exprKind with
     | ExprAtom atom -> Atom atom
@@ -17,9 +15,8 @@ let rec reifyExpr (ast: PrologExprAST): PrologValue =
     | ExprTerm (functor, args) -> Term(functor, List.map reifyExpr args)
     | ExprVariable variable -> Variable variable
     | ExprListCons (head, tail) -> ListCons(reifyExpr head, reifyExpr tail)
-    | ExprGoal goal -> GoalExpr (reifyGoal goal)
     | ExprPlaceholder ->
-        raise (PrologException ($"Incomplete expression (line %i{ast.location.line}, column %i{ast.location.column})", []))
+        raise (PrologException $"Incomplete expression (line %i{ast.location.line}, column %i{ast.location.column})")
 let reifyGoal (ast: PrologGoalAST): Goal =
     match ast.goalKind with
     | GoalSimple (functor, args) -> SimpleGoal(functor, List.map reifyExpr args)
@@ -29,7 +26,14 @@ let reifyGoal (ast: PrologGoalAST): Goal =
     | GoalDisjunction goals -> DisjunctionGoal(Array.map reifyGoal goals)
     
     | GoalPlaceholder ->
-        raise (PrologException ($"Incomplete goal (line %i{ast.location.line}, column %i{ast.location.column})", []))
+        raise (PrologException $"Incomplete goal (line %i{ast.location.line}, column %i{ast.location.column})")
+let reifyDCG (ast: DCGAST) =
+    match ast.dcgKind with
+    | DCGTerm term -> DCG.Term term
+    | DCGCall (functor, args) -> DCG.Call(functor, args |> List.map reifyExpr)
+    | DCGGoal goal -> DCG.Goal (reifyGoal goal)
+    | DCGList values -> DCG.List (values |> List.map reifyExpr)
+    | DCGSequence nested -> DCG.Sequence (nested |> Array.map reifyDCG)
 
 let writeDebugInformation indentation (text: string) =
     let prefix = String.replicate indentation "\t"
@@ -77,9 +81,6 @@ let rec substituteVariablesInExpression (scope: Scope) (expr: PrologValue) =
         
     | ListCons (head, tail) ->
         ListCons(substituteVariablesInExpression scope head, substituteVariablesInExpression scope tail)
-        
-    | GoalExpr goal ->
-        GoalExpr (substituteVariablesInGoal scope goal)
 
 let mergeBindings a b =
     a |> ValueOption.bind (fun a -> b |> ValueOption.map (Map.merge a))    
@@ -121,11 +122,6 @@ let rec assignVarFromValue allowOutVar var value =
             if varFunctor = "_" || varFunctor = valueFunctor then
                 assignVarsFromValues allowOutVar varParameters valueParameters
             else ValueNone
-        | _ -> ValueNone
-    
-    | GoalExpr varGoal ->
-        match value with
-        | GoalExpr valueGoal -> assignVarFromGoal allowOutVar varGoal valueGoal
         | _ -> ValueNone
 
     | _ ->

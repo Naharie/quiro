@@ -1,18 +1,13 @@
 ﻿open System
 open System.IO
 open Quiro
+open Quiro.BuiltinTerms
 
 [<EntryPoint>]
 let main args =
-    // https://en.wikipedia.org/wiki/Prolog_syntax_and_semantics
+    // TODO: Function to evaluate expressions
     
-    let mutable terms = StoredTerms.emptyTerms()
-    
-    terms.nativePredicates[("print", 1)] <- ResizeArray()
-    terms.nativePredicates[("print", 1)].Add (fun _ args ->
-        Console.WriteLine(PrologValue.toString args[0])
-        ValueSome [| Map.empty |]
-    )
+    let mutable terms = StoredTerms.defaultTerms()
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."
