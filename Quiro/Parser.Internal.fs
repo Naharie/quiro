@@ -48,7 +48,7 @@ let dcgAST parser =
 
 // Expressions
 
-let invalidAtomSymbols = Set.ofList [ '['; ']'; '('; ')'; '{'; '}'; ','; ';'; '.'; '?'  ]
+let invalidAtomSymbols = Set.ofList [ '['; ']'; '('; ')'; '{'; '}'; ','; ';'; '.'; '?'; '|'  ]
 let atomExpr, atomParser =    
     let isSymbol char = Char.IsSymbol char || Char.IsPunctuation char
     let symbols allowUnderScore = satisfy (fun char -> isSymbol char && (allowUnderScore || char <> '_') && (invalidAtomSymbols |> Set.contains char |> not))

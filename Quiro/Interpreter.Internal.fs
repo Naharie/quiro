@@ -99,6 +99,8 @@ let rec assignVarFromValue allowOutVar var value =
             mergeBindings
                 (assignVarFromValue allowOutVar varHead valueHead)
                 (assignVarFromValue allowOutVar varTail valueTail)
+                
+        | Variable _ when allowOutVar -> ValueSome Map.empty
         | _ -> ValueNone
 
     | ListTerm varItems ->
@@ -114,6 +116,8 @@ let rec assignVarFromValue allowOutVar var value =
                     (assignVarFromValue allowOutVar varHead valueHead)
                     (assignVarFromValue allowOutVar (ListTerm varTail) valueTail)
             | [] -> ValueNone
+            
+        | Variable _ when allowOutVar -> ValueSome Map.empty
         | _ -> ValueNone
     
     | Term(varFunctor, varParameters) ->
@@ -122,8 +126,10 @@ let rec assignVarFromValue allowOutVar var value =
             if varFunctor = "_" || varFunctor = valueFunctor then
                 assignVarsFromValues allowOutVar varParameters valueParameters
             else ValueNone
+            
+        | Variable _ when allowOutVar -> ValueSome Map.empty
         | _ -> ValueNone
-
+    
     | _ ->
         if allowOutVar && value.IsVariable || var = value then
             ValueSome (Map.ofArray Array.empty)
@@ -188,7 +194,9 @@ let tryProvePredicate (context: InterpreterContext) predicate argValues =
     | ValueSome bindings ->
         match test with
         | SimpleGoal ("true", []) ->
-            let resultingBindings = assignVarsFromValues false argValues args
+            let updatedScope = context.scope.CreateChild bindings
+            let instantiatedArgs = args |> List.map (substituteVariablesInExpression updatedScope)
+            let resultingBindings = assignVarsFromValues false argValues instantiatedArgs
 
             match resultingBindings with
             | ValueSome producedBindings ->
