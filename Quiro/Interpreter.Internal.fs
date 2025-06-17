@@ -85,57 +85,65 @@ let rec substituteVariablesInExpression (scope: Scope) (expr: PrologValue) =
 let mergeBindings a b =
     a |> ValueOption.bind (fun a -> b |> ValueOption.map (Map.merge a))    
 
-let rec assignVarFromValue allowOutVar var value =
+[<Struct>] type OutVarSupport = InVarOnly | AllowOutVar
+[<Struct>] type VarSwap = NoVarSwap | ForcedVarSwap
+
+let rec assignVarFromValue (outVar: OutVarSupport) (varSwap: VarSwap) var value =
     match var with
     | Variable "_" -> ValueSome Map.empty
     | Variable name ->
         match value with
-        | Variable _ -> ValueSome Map.empty
+        | Variable _ ->
+            if varSwap = ForcedVarSwap then
+                ValueSome (Map.ofArray [| name, value |])
+            else
+                ValueSome Map.empty
+            
         | _ -> Map.ofArray [| name, value |] |> ValueSome 
     
     | ListCons (varHead, varTail) ->
         match value with
         | ListCons (valueHead, valueTail) | ListTerm (valueHead :: Wrap ListTerm valueTail) ->
             mergeBindings
-                (assignVarFromValue allowOutVar varHead valueHead)
-                (assignVarFromValue allowOutVar varTail valueTail)
+                (assignVarFromValue outVar varSwap varHead valueHead)
+                (assignVarFromValue outVar varSwap varTail valueTail)
                 
-        | Variable _ when allowOutVar -> ValueSome Map.empty
+        | Variable _ when outVar.IsAllowOutVar -> ValueSome Map.empty
         | _ -> ValueNone
 
     | ListTerm varItems ->
         match value with
         | ListTerm valueItems ->
             if varItems.Length <> valueItems.Length then ValueNone
-            else assignVarsFromValues allowOutVar varItems valueItems
+            else assignVarsFromValues outVar varSwap varItems valueItems
 
         | ListCons (valueHead, valueTail) ->
             match varItems with
             | varHead :: varTail ->
                 mergeBindings
-                    (assignVarFromValue allowOutVar varHead valueHead)
-                    (assignVarFromValue allowOutVar (ListTerm varTail) valueTail)
+                    (assignVarFromValue outVar varSwap varHead valueHead)
+                    (assignVarFromValue outVar varSwap (ListTerm varTail) valueTail)
             | [] -> ValueNone
             
-        | Variable _ when allowOutVar -> ValueSome Map.empty
+        | Variable _ when outVar.IsAllowOutVar -> ValueSome Map.empty
         | _ -> ValueNone
     
     | Term(varFunctor, varParameters) ->
         match value with
         | Term(valueFunctor, valueParameters) ->
             if varFunctor = "_" || varFunctor = valueFunctor then
-                assignVarsFromValues allowOutVar varParameters valueParameters
+                assignVarsFromValues outVar varSwap varParameters valueParameters
             else ValueNone
             
-        | Variable _ when allowOutVar -> ValueSome Map.empty
+        | Variable _ when outVar.IsAllowOutVar -> ValueSome Map.empty
         | _ -> ValueNone
     
     | _ ->
-        if allowOutVar && value.IsVariable || var = value then
+        if outVar.IsAllowOutVar && value.IsVariable || var = value then
             ValueSome (Map.ofArray Array.empty)
         else
             ValueNone
-let rec assignVarsFromValues allowOutVar vars values =
+let rec assignVarsFromValues outVar varSwap vars values =
     if vars.Length <> values.Length then
         ValueNone
     else
@@ -143,37 +151,37 @@ let rec assignVarsFromValues allowOutVar vars values =
             match bindings with
             | ValueNone -> ValueNone
             | ValueSome _ ->
-                mergeBindings bindings (assignVarFromValue allowOutVar varItem valueItem)
+                mergeBindings bindings (assignVarFromValue outVar varSwap varItem valueItem)
         ) (ValueSome Map.empty) vars values
 
-let rec assignVarFromGoal allowOutVar var goal =
+let rec assignVarFromGoal outVar varSwap var goal =
     match var with
     | SimpleGoal(varFunctor, varParameters) ->
         match goal with
         | SimpleGoal (valueFunctor, valueParameters) ->
             if varFunctor = "_" || varFunctor = valueFunctor then
-                assignVarsFromValues allowOutVar varParameters valueParameters
+                assignVarsFromValues outVar varSwap varParameters valueParameters
             else ValueNone
         | _ -> ValueNone
 
     | NegatedGoal varSubGoal ->
         match goal with
         | NegatedGoal valueSubGoal ->
-            assignVarFromGoal allowOutVar varSubGoal valueSubGoal
+            assignVarFromGoal outVar varSwap varSubGoal valueSubGoal
         | _ -> ValueNone
 
     | ConjunctionGoal varGoals ->
         match goal with
         | ConjunctionGoal valueGoals ->
-            assignVarsFromGoals allowOutVar varGoals valueGoals
+            assignVarsFromGoals outVar varSwap varGoals valueGoals
         | _ -> ValueNone
 
     | DisjunctionGoal varGoals ->
         match goal with
         | DisjunctionGoal valueGoals ->
-            assignVarsFromGoals allowOutVar varGoals valueGoals
+            assignVarsFromGoals outVar varSwap varGoals valueGoals
         | _ -> ValueNone
-let rec assignVarsFromGoals allowOutVar vars goals =
+let rec assignVarsFromGoals outVar varSwap vars goals =
     if vars.Length <> goals.Length then
         ValueNone
     else 
@@ -181,38 +189,49 @@ let rec assignVarsFromGoals allowOutVar vars goals =
             match bindings with
             | ValueNone -> ValueNone
             | ValueSome _ ->
-                mergeBindings bindings (assignVarFromGoal allowOutVar varItem valueItem)
+                mergeBindings bindings (assignVarFromGoal outVar varSwap varItem valueItem)
         ) (ValueSome Map.empty) vars goals
 
 let emptySuccess = [| Map.empty |]
 
 let tryProvePredicate (context: InterpreterContext) predicate argValues =
     let args, test = predicate                 
-    let potentialBindings = assignVarsFromValues true args argValues
+    let potentialBindings = assignVarsFromValues AllowOutVar NoVarSwap args argValues
 
     match potentialBindings with
     | ValueSome bindings ->
         match test with
         | SimpleGoal ("true", []) ->
-            let updatedScope = context.scope.CreateChild bindings
-            let instantiatedArgs = args |> List.map (substituteVariablesInExpression updatedScope)
-            let resultingBindings = assignVarsFromValues false argValues instantiatedArgs
+            match assignVarsFromValues AllowOutVar ForcedVarSwap args argValues with
+            | ValueSome forcedBindings ->
+                let updatedScope = { parent = None; values = forcedBindings }
+                let instantiatedArgs = args |> List.map (substituteVariablesInExpression updatedScope)
+                let resultingBindings = assignVarsFromValues InVarOnly NoVarSwap argValues instantiatedArgs
 
-            match resultingBindings with
-            | ValueSome producedBindings ->
-                ValueSome [| producedBindings |]
-            | ValueNone -> ValueNone
+                match resultingBindings with
+                | ValueSome producedBindings ->
+                    ValueSome [| producedBindings |]
+                | ValueNone -> ValueNone
+            | ValueNone ->
+                let updatedScope = { parent = None; values = bindings }
+                let instantiatedArgs = args |> List.map (substituteVariablesInExpression updatedScope)
+                let resultingBindings = assignVarsFromValues InVarOnly NoVarSwap argValues instantiatedArgs
+
+                match resultingBindings with
+                | ValueSome producedBindings ->
+                    ValueSome [| producedBindings |]
+                | ValueNone -> ValueNone
         | SimpleGoal ("false", []) -> ValueNone
         | _ ->
-            let contextWithBindings = context.NestScope bindings
+            let contextWithBindings = { context with scope = { parent = None; values = bindings } }
             
             match tryProveGoal contextWithBindings test with
             | ValueSome testGoalBindings ->
                 testGoalBindings
                 |> Array.choose (fun bindingSet ->
-                    let childScope = context.scope.CreateChild bindingSet
+                    let childScope = contextWithBindings.scope.CreateChild bindingSet
                     let instantiatedArgs = args |> List.map (substituteVariablesInExpression childScope)
-                    let resultingBindings = assignVarsFromValues false argValues instantiatedArgs
+                    let resultingBindings = assignVarsFromValues InVarOnly NoVarSwap argValues instantiatedArgs
 
                     resultingBindings
                     |> Option.ofValueOption
