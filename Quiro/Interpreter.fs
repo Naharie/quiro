@@ -93,7 +93,7 @@ let storeDeclaration declaration (terms: StoredTerms) =
                 savePredicate terms functor [ Variable "S1"; Variable ("S" + string finalVar) ] body
             
             | DCG.List values ->
-                let arg = List.foldBack (fun tail element -> ListCons(element, tail)) values (Variable "X")
+                let arg = List.foldBack (fun element tail -> ListCons(element, tail)) values (Variable "X")
                 savePredicate terms functor [ arg; Variable "X" ] (SimpleGoal("true", List.empty))
                 
             | DCG.Goal goal ->
