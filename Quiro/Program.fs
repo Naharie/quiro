@@ -7,6 +7,19 @@ open Quiro.BuiltinTerms
 let main args =
     // TODO: Function to evaluate expressions
     
+    (*
+sentence --> noun_phrase, verb_phrase.
+noun_phrase --> det, noun.
+verb_phrase --> verb, noun_phrase.
+det --> [the].
+det --> [a].
+noun --> [cat].
+noun --> [bat].
+verb --> [eats].
+
+sentence(Q, [])?
+    *)
+    
     let mutable terms = StoredTerms.defaultTerms()
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
