@@ -3,6 +3,7 @@ module rec Quiro.Interpreter.Internal
 open System
 open System.Collections.Generic
 open Functional
+open Microsoft.FSharp.Core
 open Quiro
 open Quiro.AST
 
@@ -151,6 +152,41 @@ let rec assignVarsFromValues (scope: Scope) (outVar: OutVarSupport) (vars: Prolo
         ) (ValueSome Map.empty) vars values
 
 let emptySuccess = [| Map.empty |]
+
+let evaluateExpr (context: InterpreterContext) expr =
+    match expr with
+    | Atom _
+    | Number _
+    | Text _ -> expr
+    
+    | ListCons(head, tail) ->
+        let evaluatedHead = evaluateExpr context head
+        let evaluatedTail = evaluateExpr context tail
+        
+        match evaluatedTail with
+        | ListTerm tailValue ->
+            ListTerm (evaluatedHead :: tailValue)
+        | Atom "nil" ->
+            ListTerm [ evaluatedHead ]
+        | _ ->
+            ListTerm [ evaluatedHead; evaluatedTail ]
+    
+    | ListTerm values ->
+        ListTerm (values |> List.map (evaluateExpr context))
+        
+    | Variable name ->
+        Scope.lookupValue name context.scope
+        |> ValueOption.map (evaluateExpr context)
+        |> ValueOption.defaultValue expr
+
+    | Term (functor, args) ->
+        let functions = StoredTerms.lookupFunctions context.terms (functor, args.Length)
+        
+        if functions.Count = 0 then expr
+        else
+            functions
+            |> Seq.tryPick (fun func -> func context args |> Option.ofValueOption)
+            |> Option.defaultValue expr
 
 let tryProvePredicate (context: InterpreterContext) predicate argValues =
     let args, test = predicate                 
