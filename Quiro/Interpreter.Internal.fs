@@ -1,7 +1,6 @@
 module rec Quiro.Interpreter.Internal
 
 open System
-open System.Collections
 open System.Collections.Generic
 open Functional
 open Microsoft.FSharp.Core
@@ -74,7 +73,20 @@ let rec substituteVariablesInExpression (scope: Scope) (expr: PrologValue) =
         ListCons(substituteVariablesInExpression scope head, substituteVariablesInExpression scope tail)
 
 let private mergeBindings a b =
-    a |> ValueOption.bind (fun a -> b |> ValueOption.map (Map.merge a))    
+    a |> ValueOption.bind (fun a ->
+        b |> ValueOption.bind (
+            Map.fold (fun map key value ->
+                match map with
+                | ValueNone -> ValueNone
+                | ValueSome map ->
+                    match map |> Map.tryFind key with
+                    | None ->
+                        map |> Map.add key value |> ValueSome
+                    | Some existing ->
+                        if value = existing then ValueSome map else ValueNone
+            ) (ValueSome a)
+        )
+    )    
 
 [<Struct>] type OutVarSupport = InVarOnly | AllowOutVar
 
@@ -330,11 +342,21 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
             |> Seq.noneIfEmpty
     
     | DisjunctionGoal goals ->
-        let mutable result = ValueNone
-        let mutable index = 0
+        seq {
+            let mutable index = 0
+            let mutable hasResult = false
         
-        while index < goals.Length && result.IsNone do
-            result <- tryProveGoal context goals[index]
-            index <- index + 1
-
-        result
+            while index < goals.Length do
+                match goals[index] with
+                | SimpleGoal("!", []) ->
+                    if hasResult then index <- goals.Length
+                | goal ->
+                    match tryProveGoal context goal with
+                    | ValueSome results ->
+                        hasResult <- true
+                        yield! results
+                    | ValueNone -> ()
+                    
+                index <- index + 1
+        }
+        |> Seq.noneIfEmpty

@@ -5,8 +5,6 @@ open Quiro.BuiltinTerms
 
 [<EntryPoint>]
 let main args =
-    // TODO: Function to evaluate expressions
-    
     (*
 sentence --> noun_phrase, verb_phrase.
 noun_phrase --> det, noun.
