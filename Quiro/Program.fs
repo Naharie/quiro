@@ -19,7 +19,7 @@ verb --> [eats].
 
 sentence(Q, [])?
     *)
-    
+
     let mutable terms = StoredTerms.defaultTerms()
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
