@@ -10,6 +10,7 @@
         <Compile Include="Dictionary.fs" />
         <Compile Include="ActivePatterns.fs" />
         <Compile Include="Map.fs" />
+        <Compile Include="Seq.fs" />
         <Compile Include="BigFloat.fs" />
         <Compile Include="AST.fs" />
         <Compile Include="PrologValue.fs" />

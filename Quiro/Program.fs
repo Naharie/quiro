@@ -68,15 +68,25 @@ sentence(Q, [])?
                 try
                     match Interpreter.query goal terms debugLevel with
                     | ValueSome bindings ->
-                        printfn "Yes"
-                        if bindings.Length > 1 then printfn ""
-
-                        for bindingGroup in bindings do
+                        printfn "Yes\r\n"
+                        
+                        let cached = Seq.cache bindings
+                        let showGroup (bindingGroup: Map<string, PrologValue>) =
                             for KeyValue(variable, value) in bindingGroup do
                                 printfn $"%s{variable} = %s{PrologValue.toString value}"
 
                             if bindingGroup.Count > 1 then
                                 printfn ""  
+                        
+                        if cached |> Seq.tail |> Seq.isEmpty then
+                            showGroup (Seq.head cached)
+                        else
+                            let mutable viewMore = true
+                            let enumerator = cached.GetEnumerator()
+                            
+                            while viewMore && enumerator.MoveNext() do
+                                showGroup enumerator.Current
+                                viewMore <- Console.ReadKey().KeyChar = ';'
 
                     | ValueNone -> printfn "No\r\n"
                 with

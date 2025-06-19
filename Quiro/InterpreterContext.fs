@@ -15,7 +15,7 @@ type DebugLevel =
 /// The instantiated form of a predicate or function.
 type InstantiatedCompound = string * PrologValue
 
-type NativePredicate = InterpreterContext -> PrologValue list -> Map<string, PrologValue>[] voption
+type NativePredicate = InterpreterContext -> PrologValue list -> Map<string, PrologValue> seq voption
 type NativeFunction = InterpreterContext -> PrologValue list -> PrologValue voption
 
 type InterpreterContext = {

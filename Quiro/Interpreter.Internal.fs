@@ -1,6 +1,7 @@
 module rec Quiro.Interpreter.Internal
 
 open System
+open System.Collections
 open System.Collections.Generic
 open Functional
 open Microsoft.FSharp.Core
@@ -188,7 +189,7 @@ let evaluateExpr (context: InterpreterContext) expr =
             |> Seq.tryPick (fun func -> func context args |> Option.ofValueOption)
             |> Option.defaultValue expr
 
-let tryProvePredicate (context: InterpreterContext) predicate argValues =
+let tryProvePredicate (context: InterpreterContext) predicate argValues: Map<string, PrologValue> seq voption =
     let args, test = predicate                 
     let potentialBindings = assignVarsFromValues context.scope AllowOutVar args argValues
 
@@ -211,7 +212,7 @@ let tryProvePredicate (context: InterpreterContext) predicate argValues =
             match tryProveGoal contextWithBindings test with
             | ValueSome testGoalBindings ->
                 testGoalBindings
-                |> Array.choose (fun bindingSet ->
+                |> Seq.choose (fun bindingSet ->
                     let childScope = contextWithBindings.scope.CreateChild bindingSet
                     let instantiatedArgs = args |> List.map (substituteVariablesInExpression childScope)
                     let resultingBindings = assignVarsFromValues childScope InVarOnly argValues instantiatedArgs
@@ -219,10 +220,11 @@ let tryProvePredicate (context: InterpreterContext) predicate argValues =
                     resultingBindings
                     |> Option.ofValueOption
                 )
-                |> function | [||] -> ValueNone | v -> ValueSome v
+                |> Seq.noneIfEmpty
+
             | ValueNone -> ValueNone
     | ValueNone -> ValueNone
-let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
+let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
     match goal with
     | SimpleGoal (("true" | "repeat" | "!"), []) -> ValueSome emptySuccess
     | SimpleGoal (("false" | "fail"), []) -> ValueNone
@@ -232,29 +234,23 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
         let userPredicates = StoredTerms.lookupPredicates context.terms key
         let nativePredicates = StoredTerms.lookupNativePredicates context.terms key
         
-        let producedBindings = ResizeArray()
         let updatedContext = { context with stack = (PredicateFrame key) :: context.stack }
-
         let instantiatedArgValues = argValues |> List.map (substituteVariablesInExpression context.scope)
-        
-        for userPredicate in userPredicates do
-            match tryProvePredicate updatedContext userPredicate instantiatedArgValues with
-            | ValueSome newBindings ->
-                // By wrapping as a ReadOnlySpan instead of using the more generic overload we avoid an IEnumerator<_> allocation
-                producedBindings.AddRange(ReadOnlySpan(newBindings))
-            | ValueNone -> ()
 
-        for nativePredicate in nativePredicates do
-            match nativePredicate updatedContext instantiatedArgValues with
-            | ValueSome newBindings ->
-                // Same trick as before
-                producedBindings.AddRange(ReadOnlySpan(newBindings))
-            | ValueNone -> ()
+        seq {
+            for userPredicate in userPredicates do
+                match tryProvePredicate updatedContext userPredicate instantiatedArgValues with
+                | ValueSome newBindings ->
+                    yield! newBindings
+                | ValueNone -> ()
 
-        if producedBindings.Count = 0 then
-            ValueNone
-        else
-            ValueSome (producedBindings.ToArray())
+            for nativePredicate in nativePredicates do
+                match nativePredicate updatedContext instantiatedArgValues with
+                | ValueSome newBindings ->
+                    yield! newBindings
+                | ValueNone -> ()
+        }
+        |> Seq.noneIfEmpty
         
     | NegatedGoal subGoal ->
         match tryProveGoal context subGoal with
@@ -263,72 +259,75 @@ let rec tryProveGoal context goal : Map<string, PrologValue>[] voption =
         
     | ConjunctionGoal goals ->
         // Note: "repeat" choice points and cuts "!"
-        
-        let workingSets = Stack()
-        let repeats = Stack()
-        let results = ResizeArray()
             
         if goals.Length = 1 then
             tryProveGoal context goals[0]
         else
-            workingSets.Push ([| Map.empty |], 0, 0)
+            seq {
+                let workingSets = Stack<Map<string, PrologValue> seq * IEnumerator<Map<string, PrologValue>> * int>()
+                let repeats = Stack<_>()
+                let mutable resultCount = 0
+                
+                let initial = [| Map.empty |]
+                workingSets.Push (Seq.ofArray initial, (initial :> IEnumerable<_>).GetEnumerator(), 0)
             
-            while workingSets.Count > 0 do
-                let bindingSets, goalIndex, setIndex = workingSets.Peek()
-                let repeatIndex, repeatCount = if repeats.Count > 0 then repeats.Peek() else -1, -1
-
-                if setIndex >= bindingSets.Length && repeatIndex = goalIndex - 1 && results.Count = repeatCount then
-                    workingSets.Pop() |> ignore
-                    workingSets.Push (bindingSets, goalIndex, 0)
-                elif setIndex < bindingSets.Length then
-                    let bindingSet = bindingSets[setIndex]
-                    let goal = goals[goalIndex]
+                while workingSets.Count > 0 do
+                    let source, enumerator, goalIndex = workingSets.Peek()
+                    let repeatIndex, repeatCount = if repeats.Count > 0 then repeats.Peek() else -1, -1
+                    let hasMore = enumerator.MoveNext()
                     
-                    match goal with
-                    // A cut means we immediately discard all choice points
-                    | SimpleGoal("!", []) ->
-                        let temporary = Stack()
-                        
-                        while workingSets.Count > 0 do
-                            let b, g, _ = workingSets.Pop()
-                            temporary.Push((b, g, b.Length))
-                        
-                        while temporary.Count > 0 do
-                            workingSets.Push(temporary.Pop())
-
-                        if goalIndex + 1 < goals.Length then
-                            workingSets.Pop() |> ignore
-                            workingSets.Push ([| bindingSets[setIndex] |], goalIndex + 1, 0)
-                            
-                    | SimpleGoal("repeat", []) ->
-                        repeats.Push(goalIndex, results.Count)
-                        
-                        if goalIndex + 1 < goals.Length then
-                            workingSets.Pop() |> ignore
-                            workingSets.Push (bindingSets, goalIndex + 1, 0)
-                            
-                    | _ ->
-                        let contextWithUpdatedBindings = context.NestScope bindingSet
-                        let potentialGoalResults = tryProveGoal contextWithUpdatedBindings goal
-                        
+                    if not hasMore && repeatIndex = goalIndex - 1 && resultCount = repeatCount then
                         workingSets.Pop() |> ignore
-                        workingSets.Push (bindingSets, goalIndex, setIndex + 1)
+                        workingSets.Push (source, source.GetEnumerator(), goalIndex)
+                    elif hasMore then
+                        let bindingSet = enumerator.Current
+                        let goal = goals[goalIndex]
                         
-                        match potentialGoalResults with
-                        | ValueSome goalResults ->
-                            let newBindingSets =
-                                goalResults
-                                |> Array.map (Map.merge bindingSet)
+                        match goal with
+                        // A cut means we immediately discard all choice points
+                        | SimpleGoal("!", []) ->
+                            let temporary = Stack<_>()
+                            
+                            while workingSets.Count > 0 do
+                                let _, _, g = workingSets.Pop()
+                                temporary.Push((Seq.empty, Seq.empty.GetEnumerator(), g))
 
-                            if goalIndex + 1 >= goals.Length then
-                                results.AddRange(ReadOnlySpan(newBindingSets))
-                            else
-                                workingSets.Push (newBindingSets, goalIndex + 1, 0)
-                        | ValueNone -> ()
-                else
-                    workingSets.Pop() |> ignore
+                            while temporary.Count > 0 do
+                                workingSets.Push(temporary.Pop())
 
-            if results.Count = 0 then ValueNone else ValueSome (results.ToArray())
+                            if goalIndex + 1 < goals.Length then
+                                workingSets.Pop() |> ignore
+                                
+                                let source = [| bindingSet |]
+                                workingSets.Push (source, (source :> IEnumerable<_>).GetEnumerator(), goalIndex + 1)
+                                
+                        | SimpleGoal("repeat", []) ->
+                            repeats.Push(goalIndex, resultCount)
+
+                            if goalIndex + 1 < goals.Length then
+                                workingSets.Pop() |> ignore
+                                workingSets.Push (source, enumerator, goalIndex + 1)
+                                
+                        | _ ->
+                            let contextWithUpdatedBindings = context.NestScope bindingSet
+                            let potentialGoalResults = tryProveGoal contextWithUpdatedBindings goal
+                            
+                            match potentialGoalResults with
+                            | ValueSome goalResults ->
+                                let newBindingSets =
+                                    goalResults
+                                    |> Seq.map (Map.merge bindingSet)
+                                    |> Seq.cache
+
+                                if goalIndex + 1 >= goals.Length then
+                                    yield! newBindingSets
+                                else
+                                    workingSets.Push (newBindingSets, newBindingSets.GetEnumerator(), goalIndex + 1)
+                            | ValueNone -> ()
+                    else
+                        workingSets.Pop() |> ignore
+            }
+            |> Seq.noneIfEmpty
     
     | DisjunctionGoal goals ->
         let mutable result = ValueNone

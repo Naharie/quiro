@@ -122,7 +122,7 @@ let storeDeclaration declaration (terms: StoredTerms) =
                 savePredicate terms functor (List.append reifiedArgs [ Variable ("S" + string finalVar) ]) body
 
 /// Determine whether a given query is provable or not.
-let rec query (target: Goal) (terms: StoredTerms) (debugLevel: DebugLevel): Map<string, PrologValue>[] voption =    
+let rec query (target: Goal) (terms: StoredTerms) (debugLevel: DebugLevel): Map<string, PrologValue> seq voption =    
     let context = {
         debugLevel = debugLevel
         
