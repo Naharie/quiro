@@ -190,6 +190,20 @@ let defaultTerms() =
         | _ -> ValueNone
     )
     
+    describe "not" "not(:Pred)" "Negates the success of the given predicate."
+    addPred ("not", 1) (fun context args ->
+        match args with
+        | [ Variable pred ] ->
+            match tryProveGoal context (SimpleGoal (pred, [])) with
+            | ValueSome _ -> ValueNone
+            | ValueNone -> emptySuccess
+        | [ Term (functor, args) ] ->
+            match tryProveGoal context (SimpleGoal (functor, args)) with
+            | ValueSome _ -> ValueNone
+            | ValueNone -> emptySuccess
+        | _ -> ValueNone
+    )
+    
     describe "length" "length(?List, ?Length)" "Determines the length of list, generates a list of a given length, or pairs of lists and lengths."
     addPred ("length", 2) (fun context args ->
         match args with
