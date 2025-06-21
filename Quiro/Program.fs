@@ -85,6 +85,7 @@ sentence(Q, [])?
                             while viewMore && enumerator.MoveNext() do
                                 showGroup enumerator.Current
                                 viewMore <- Console.ReadKey().KeyChar = ';'
+                                Console.WriteLine()
 
                     | ValueNone -> printfn "No\r\n"
                 with

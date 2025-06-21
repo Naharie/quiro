@@ -14,6 +14,13 @@ with
     static member Zero = Decimal BigDecimal.Zero
     static member One = Decimal BigDecimal.One
 
+    static member (~-) v =
+        match v with
+        | Decimal d -> Decimal (-d)
+        | NaN -> NaN
+        | PositiveInfinity -> NegativeInfinity
+        | NegativeInfinity -> PositiveInfinity
+    
     static member (+) (a, b) =
         match a, b with
         | NaN, _ | _, NaN -> NaN

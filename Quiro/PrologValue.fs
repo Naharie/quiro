@@ -7,16 +7,17 @@ type PrologValue =
     | Number of BigFloat
     // "Hello World"
     | Text of string
+    
+    // [ Head | Tail ]
+    | ListCons of head:PrologValue * tail:PrologValue
     // [ 1, 2, 3 ]
     | ListTerm of list:PrologValue list
     
     // func(x, y)
     | Term of target:string * args:PrologValue list
-    
+
     // X, Y
     | Variable of name:string
-    // [ Head | Tail ]
-    | ListCons of head:PrologValue * tail:PrologValue
 
 type Goal =
     // A simple goal is a simple predication such as even(X), where the top level expression does not itself involve subgoals.
