@@ -245,7 +245,7 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
         let key = (functor, argValues.Length)
         let userPredicates = StoredTerms.lookupPredicates context.terms key
         let nativePredicates = StoredTerms.lookupNativePredicates context.terms key
-        
+
         let updatedContext = { context with stack = (PredicateFrame key) :: context.stack }
         let instantiatedArgValues = argValues |> List.map (substituteVariablesInExpression context.scope)
 
@@ -260,6 +260,25 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
                 match nativePredicate updatedContext instantiatedArgValues with
                 | ValueSome newBindings ->
                     yield! newBindings
+                | ValueNone -> ()
+
+            if key <> ("var_args", 1) then
+                match tryProveGoal context (SimpleGoal ("var_args", [ Atom functor ])) with
+                | ValueSome _ ->
+                    let wrappedArgs = [ ListTerm instantiatedArgValues ]
+                    
+                    for userPredicate in StoredTerms.lookupPredicates context.terms (functor, 1) do
+                        match tryProvePredicate updatedContext userPredicate wrappedArgs with
+                        | ValueSome newBindings ->
+                            yield! newBindings
+                        | ValueNone -> ()
+                    
+                    for nativePredicate in StoredTerms.lookupNativePredicates context.terms (functor, 1) do
+                        match nativePredicate updatedContext wrappedArgs with
+                        | ValueSome newBindings ->
+                            yield! newBindings
+                        | ValueNone -> ()
+                    
                 | ValueNone -> ()
         }
         |> Seq.noneIfEmpty

@@ -1,6 +1,7 @@
 module Quiro.BuiltinTerms.StoredTerms
 
 open System
+open System.Collections.Generic
 open ExtendedNumerics
 open Functional
 open Microsoft.FSharp.Core
@@ -57,18 +58,40 @@ let defaultTerms() =
 
         backing.Add handler
 
+    let describeTable = Dictionary<string, ResizeArray<string * string>>()
     let describe term signature description =
-        addPred ("describe", 3) (fun _ args ->
-            match args with
-            | [ Atom lookupTerm; Variable signatureVar; Variable descriptionVar ] when lookupTerm = term ->
-                ValueSome [| Map.ofArray [|
-                    (signatureVar, Text signature)
-                    (descriptionVar, Text description)
-                |] |]
+        let mutable container = Unchecked.defaultof<ResizeArray<string * string>>
+        
+        if not (describeTable.TryGetValue(term, &container)) then
+            container <- ResizeArray()
+            describeTable[term] <- container
 
-            | _ -> ValueNone
-        )
+        container.Add(signature, description)
     
+    addPred ("describe", 3) (fun _ args ->
+        match args with
+        | [ Atom lookupTerm; Variable signatureVar; Variable descriptionVar ] ->
+            match describeTable.TryGetValue lookupTerm with
+            | true, container ->
+                seq {
+                    for signature, description in container do
+                        yield Map.ofArray [| (signatureVar, Text signature); (descriptionVar, Text description) |]
+                }
+                |> Seq.noneIfEmpty
+            | false, _ -> ValueNone
+
+        | _ -> ValueNone
+    )
+    
+    let varArgs = HashSet<string>()
+    let allowVarArgs term = varArgs.Add term |> ignore
+    
+    addPred ("var_args", 1) (fun _ args ->
+        match args with
+        | [ Atom term ] -> wrap (varArgs.Contains term)
+        | _ -> ValueNone
+    )
+
     addFunc ("+", 2) (mathFunc (+))
     addFunc ("-", 2) (mathFunc (-))
     addFunc ("*", 2) (mathFunc (*))
@@ -201,6 +224,15 @@ let defaultTerms() =
             match tryProveGoal context (SimpleGoal (functor, args)) with
             | ValueSome _ -> ValueNone
             | ValueNone -> emptySuccess
+        | _ -> ValueNone
+    )
+    
+    allowVarArgs "call"
+    describe "call" "call(Pred) / call(Pred, A) / call(Pred, A, B) / ..." "Invokes the predicate specified by the first term with the remaining terms as arguments."
+    addPred ("call", 1) (fun context args ->
+        match args with
+        | [ ListTerm (Atom pred :: predArgs) ] ->
+            tryProveGoal context (SimpleGoal (pred, predArgs))
         | _ -> ValueNone
     )
     
