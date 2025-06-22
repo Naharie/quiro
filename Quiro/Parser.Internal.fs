@@ -101,8 +101,15 @@ let numberExpr: _ Parser =
 let textExpr: _ Parser =
     let quote = skipChar '"'
     let unescapedChar = noneOf [ '\\'; '"' ]
-    let escapedChar = skipChar '\\' >>. anyOf [ '\\'; '"' ]
-    
+    let escapedChar =
+        skipChar '\\' >>. choice [
+            charReturn '\\' '\\'
+            charReturn '"' '"'
+            charReturn 't' '\t'
+            charReturn 'r' '\r'
+            charReturn 'n' '\n'
+        ]
+
     between quote quote (manyChars (unescapedChar <|> escapedChar))
     |>> ExprText
     <?> "string"
@@ -195,11 +202,11 @@ let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<PrologE
 
 expression.TermParser <- ws >>. choice [
     parenExpr
+    textExpr
+    numberExpr
+    (attempt listConsExpr <|> listExpression)
     variableExpr
     termOrAtomExpr
-    numberExpr
-    textExpr
-    (attempt listConsExpr <|> listExpression)
     placeholderExpr
 ] .>> ws
 

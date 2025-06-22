@@ -262,8 +262,8 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
                     yield! newBindings
                 | ValueNone -> ()
 
-            if key <> ("var_args", 1) then
-                match tryProveGoal context (SimpleGoal ("var_args", [ Atom functor ])) with
+            if functor <> "@meta" then
+                match tryProveGoal context (SimpleGoal ("@meta", [ Atom functor; Atom "var_args" ])) with
                 | ValueSome _ ->
                     let wrappedArgs = [ ListTerm instantiatedArgValues ]
                     

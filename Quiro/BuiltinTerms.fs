@@ -86,9 +86,9 @@ let defaultTerms() =
     let varArgs = HashSet<string>()
     let allowVarArgs term = varArgs.Add term |> ignore
     
-    addPred ("var_args", 1) (fun _ args ->
+    addPred ("@meta", 2) (fun _ args ->
         match args with
-        | [ Atom term ] -> wrap (varArgs.Contains term)
+        | [ Atom term; Atom "var_args" | Term("var_args", []) ] -> wrap (varArgs.Contains term)
         | _ -> ValueNone
     )
 
