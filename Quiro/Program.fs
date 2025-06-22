@@ -6,6 +6,8 @@ open Quiro.BuiltinTerms
 
 [<EntryPoint>]
 let main args =
+    // file/process_lines(Path, Lines), sort(List, Sorted), convert/string-list concat(Groups, Separator, Combined)
+    
     let mutable terms = StoredTerms.defaultTerms()
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
@@ -73,6 +75,7 @@ let main args =
                             
                             while viewMore && enumerator.MoveNext() do
                                 showGroup enumerator.Current
+                                Console.Write "-- "
                                 viewMore <- Console.ReadKey().KeyChar = ';'
                                 Console.WriteLine()
 

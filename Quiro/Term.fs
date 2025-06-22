@@ -66,9 +66,18 @@ module Term =
             values
             |> List.map toString
             |> String.concat ", "
-            |> fun body -> sprintf $"[ %s{body} ]"
-        | ListCons (head, tail) ->
-            sprintf $"[ %s{toString head} | %s{toString tail} ]"
+            |> sprintf "[ %s ]"
+        | ListCons _ ->
+            let rec go value =
+                match value with
+                | Atom "nil" | ListTerm [] -> []
+                | ListCons(head, tail) -> head :: go tail
+                | _ -> [ value ]
+
+            go term
+            |> List.map toString
+            |> String.concat ", "
+            |> sprintf "[ %s ]"
             
         | Term(functor, args) ->
             let args =

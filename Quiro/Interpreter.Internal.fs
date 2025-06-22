@@ -128,15 +128,22 @@ let rec unify (left: Term) (right: Term) =
     
     | _, _ -> ValueNone
 let rec unifyMany (left: Term list) (right: Term list) =
-    let left = List.toArray left
-    let right = List.toArray right
-    
-    Array.map2 (fun a b -> ValueOption.toOption (unify a b)) left right
-    |> Array.choose id
-    |> fun results ->
-        if results.Length = 0 then ValueNone
-        else ValueSome results
-    |> ValueOption.map (Array.collect id)
+    if left.Length = 0 && right.Length = 0 then
+        ValueSome Array.empty
+    else
+        let left = List.toArray left
+        let right = List.toArray right
+        
+        Array.map2 (fun a b -> ValueOption.toOption (unify a b)) left right
+        |> Array.choose id
+        |> fun results ->
+            if results.Length = 0 then ValueNone
+            else ValueSome results
+        |> ValueOption.map (Array.collect id)
+
+let substituteAll replacements term =
+    replacements
+    |> Array.fold (fun term (var, value) -> substitute var value term) term
 
 let evaluateExpr (context: InterpreterContext) expr =
     match expr with
@@ -178,35 +185,36 @@ let (|AtomOrTerm|_|) atom value =
     | Atom name | Term(name, _) when name = atom -> Some ()
     | _ -> None
 
-let tryProvePredicate (context: InterpreterContext) (predicate: Term list * Term) argValues substitutions =
+let tryProvePredicate (context: InterpreterContext) (predicate: Term list * Term) argValues substitutions: ((Var * Term)[] * (Var * Term)[]) seq voption =
     let args, body = predicate                 
     let potentialBindings = unifyMany args argValues
 
     match potentialBindings with
     | ValueNone -> ValueNone
     | ValueSome bindings ->
-        let instantiatedBody =
-            bindings
-            |> Array.fold (fun body (var, value) -> substitute var value body) body
+        let instantiatedBody = substituteAll bindings body
         let instantiatedSubstitutions =
             substitutions
             |> Array.map (fun (before, after) ->
-                let updatedAfter =
-                    bindings
-                    |> Array.fold (fun body (var, value) -> substitute var value body) after
-                    
-                before, updatedAfter
+                before, (substituteAll bindings after)
             )
         
         tryProveGoal context instantiatedBody instantiatedSubstitutions
-let rec tryProveGoal context goal (substitutions: (Var * Term)[])  =
+        |> ValueOption.map (fun results ->
+            results
+            |> Seq.map (fun (frame, bubbledSubstitutions) ->
+                (frame |> Array.map (fun (key, value) -> key, substituteAll bindings value)), bubbledSubstitutions
+            )
+        )
+ 
+let rec tryProveGoal context goal (substitutions: (Var * Term)[]) : ((Var * Term)[] * (Var * Term)[]) seq voption  =
     match goal with
     | Number _ -> raise (PrologException "Expected an invocable but found a number instead!")
     | Text _ -> raise (PrologException "Expected an invocable but found a string instead!")
     | Variable _ -> raise (PrologException "Expected an invocable but found a variable instead!")
     | ListCons _ | ListTerm _ -> raise (PrologException "Expected an invocable but found a list instead!")
-        
-    | AtomOrTerm "true" | AtomOrTerm "repeat" | AtomOrTerm "!" -> ValueSome (Seq.singleton substitutions)
+
+    | AtomOrTerm "true" | AtomOrTerm "repeat" | AtomOrTerm "!" -> ValueSome (Seq.singleton (substitutions, substitutions))
     | AtomOrTerm "false" | AtomOrTerm "fail" -> ValueNone
 
     | Term (functor, argValues) | Pair [] (argValues, Atom functor) ->
@@ -253,22 +261,22 @@ let rec tryProveGoal context goal (substitutions: (Var * Term)[])  =
                 | ValueNone -> ()
         }
         |> Seq.noneIfEmpty
-        
+
     | Negation subGoal ->
         match tryProveGoal context subGoal substitutions with
         | ValueSome _ -> ValueNone
-        | ValueNone -> ValueSome [ Array.empty ]
+        | ValueNone -> ValueSome [ Array.empty, Array.empty ]
 
     | Conjunction goals ->
         if goals.Length = 1 then
             tryProveGoal context goals[0] substitutions
         else
             seq {
-                let workingSets = Stack<(Var * Term)[] seq * IEnumerator<(Var * Term)[]> * int>()
+                let workingSets = Stack<((Var * Term)[] * (Var * Term)[]) seq * IEnumerator<(Var * Term)[] * (Var * Term)[]> * int>()
                 let repeats = Stack<_>()
                 let mutable resultCount = 0
 
-                let initial = [| Array.empty |]
+                let initial = [| Array.empty, substitutions |]
                 workingSets.Push (Seq.ofArray initial, (initial :> IEnumerable<_>).GetEnumerator(), 0)
             
                 while workingSets.Count > 0 do
@@ -280,7 +288,7 @@ let rec tryProveGoal context goal (substitutions: (Var * Term)[])  =
                         workingSets.Pop() |> ignore
                         workingSets.Push (source, source.GetEnumerator(), goalIndex)
                     elif hasMore then
-                        let bindingSet = enumerator.Current
+                        let bindingSet, substitutions = enumerator.Current
                         let goal = goals[goalIndex]
                         
                         match goal with
@@ -297,8 +305,8 @@ let rec tryProveGoal context goal (substitutions: (Var * Term)[])  =
 
                             if goalIndex + 1 < goals.Length then
                                 workingSets.Pop() |> ignore
-                                
-                                let source = [| bindingSet |]
+
+                                let source = [| bindingSet, substitutions |]
                                 workingSets.Push (source, (source :> IEnumerable<_>).GetEnumerator(), goalIndex + 1)
                                 
                         | AtomOrTerm "repeat" ->
@@ -309,24 +317,30 @@ let rec tryProveGoal context goal (substitutions: (Var * Term)[])  =
                                 workingSets.Push (source, enumerator, goalIndex + 1)
                                 
                         | _ ->
-                            let instantiatedGoal =
-                                bindingSet
-                                |> Array.fold (fun goal (var, value) -> substitute var value goal) goal
+                            let instantiatedGoal = substituteAll bindingSet goal
                             let instantiatedSubstitutions =
                                 substitutions
                                 |> Array.map (fun (before, after) ->
-                                    let updatedAfter =
-                                        bindingSet
-                                        |> Array.fold (fun body (var, value) -> substitute var value body) after
-                                        
-                                    before, updatedAfter
+                                    before, (substituteAll bindingSet after)
                                 )
                             
                             match tryProveGoal context instantiatedGoal instantiatedSubstitutions with
                             | ValueSome goalResults ->
                                 let newBindingSets =
                                     goalResults
-                                    |> Seq.map (Array.append bindingSet)
+                                    |> Seq.map (fun (resultFrame, bubbledSubstitutions) ->
+                                        resultFrame
+                                        |> Array.map (fun (key, value) -> key, (substituteAll bindingSet value))
+                                        |> Map.ofArray
+                                        |> Map.merge (
+                                            bindingSet
+                                            |> Array.map (fun (key, value) -> key, (substituteAll resultFrame value))
+                                            |> Map.ofArray
+                                        )
+                                        |> Seq.map (fun (KeyValue (k, v)) -> k, v)
+                                        |> Seq.toArray
+                                        |> fun frame -> frame, bubbledSubstitutions
+                                    )
                                     |> Seq.cache
 
                                 if goalIndex + 1 >= goals.Length then

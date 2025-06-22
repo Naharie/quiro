@@ -12,9 +12,9 @@ open Quiro.StoredRules
 [<AutoOpen>]
 module Helpers =
     let pred (f: InterpreterContext -> Term list -> Map<string * int, Term> seq voption) = f
-    let emptySuccess: (Var * Term)[] seq voption = ValueSome [| Array.empty |]
-    let inline wrap test =
-        if test then emptySuccess else ValueNone
+    let inline emptySuccess context: ((Var * Term)[] * (Var * Term)[]) seq voption = ValueSome [| Array.empty, context.substitutions |]
+    let inline wrap context test: ((Var * Term)[] * (Var * Term)[]) seq voption =
+        if test then ValueSome [| Array.empty, context.substitutions |] else ValueNone
     
     let func (f: InterpreterContext -> Term list -> Term voption) = f
     let mathFunc op = func(fun context args ->
@@ -78,7 +78,7 @@ let defaultTerms() =
                         yield [|
                             signatureVar, (Text signature)
                             descriptionVar, (Text description)
-                        |]
+                        |], context.substitutions
                 }
                 |> Seq.noneIfEmpty
             | false, _ -> ValueNone
@@ -89,9 +89,9 @@ let defaultTerms() =
     let varArgs = HashSet<string>()
     let allowVarArgs term = varArgs.Add term |> ignore
     
-    addPred ("@meta", 2) (fun _ args ->
+    addPred ("@meta", 2) (fun context args ->
         match args with
-        | [ Atom term; Atom "var_args" | Term("var_args", []) ] -> wrap (varArgs.Contains term)
+        | [ Atom term; Atom "var_args" | Term("var_args", []) ] -> wrap context (varArgs.Contains term)
         | _ -> ValueNone
     )
 
@@ -116,9 +116,9 @@ let defaultTerms() =
         |])
 
     describe "nl" "nl" "Prints a newline to stdout."
-    addPred ("nl", 0) (fun _ _ ->
+    addPred ("nl", 0) (fun context _ ->
         Console.WriteLine()
-        emptySuccess
+        emptySuccess context
     )
     
     describe "write" "write(?Value)" "Prints a value to stdout or a reads a character from stdin."
@@ -126,15 +126,15 @@ let defaultTerms() =
         match args[0] with
         | Variable name ->
             let value = Console.ReadLine()
-            ValueSome [| [| name, (Text value) |] |]
+            ValueSome [| [| name, (Text value) |], context.substitutions |]
 
         | Text text ->
             Console.Write text
-            emptySuccess
+            emptySuccess context
 
         | value ->
             Console.Write(Term.toString value)
-            emptySuccess    
+            emptySuccess context
     )
 
     addPred ("<", 2) (fun context args ->
@@ -142,10 +142,10 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> [| a, (Number i) |] })
+                ValueSome (seq { for i in b - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> [| a, (Number i) |], context.substitutions })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> [| b, (Number i) |] })
-            | _ -> wrap (a < b)
+                ValueSome (seq { for i in a + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> [| b, (Number i) |], context.substitutions })
+            | _ -> wrap context (a < b)
         | _ -> ValueNone
     )
     addPred ("<=", 2) (fun context args ->
@@ -153,10 +153,10 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b .. -BigFloat.One .. BigFloat.NegativeInfinity -> [| a, (Number i) |] })
+                ValueSome (seq { for i in b .. -BigFloat.One .. BigFloat.NegativeInfinity -> [| a, (Number i) |], context.substitutions })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a .. BigFloat.One .. BigFloat.PositiveInfinity -> [| b, (Number i) |] })
-            | _ -> wrap (a <= b)
+                ValueSome (seq { for i in a .. BigFloat.One .. BigFloat.PositiveInfinity -> [| b, (Number i) |], context.substitutions })
+            | _ -> wrap context (a <= b)
         | _ -> ValueNone
     )
      
@@ -165,10 +165,10 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> [| a, (Number i) |] })
+                ValueSome (seq { for i in b + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> [| a, (Number i) |], context.substitutions })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> [| b, (Number i) |] })
-            | _ -> wrap (a > b)
+                ValueSome (seq { for i in a - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> [| b, (Number i) |], context.substitutions })
+            | _ -> wrap context (a > b)
         | _ -> ValueNone
     )
     addPred (">=", 2) (fun context args ->
@@ -176,21 +176,21 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b .. BigFloat.One .. BigFloat.PositiveInfinity -> [| a, (Number i) |] })
+                ValueSome (seq { for i in b .. BigFloat.One .. BigFloat.PositiveInfinity -> [| a, (Number i) |], context.substitutions })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a .. -BigFloat.One .. BigFloat.NegativeInfinity -> [| b, (Number i) |] })
-            | _ -> wrap (a >= b)
+                ValueSome (seq { for i in a .. -BigFloat.One .. BigFloat.NegativeInfinity -> [| b, (Number i) |], context.substitutions })
+            | _ -> wrap context (a >= b)
         | _ -> ValueNone
     )
     
-    addPred ("=", 2) (fun _ args ->
+    addPred ("=", 2) (fun context args ->
         match args with
-        | [ a; b ] -> wrap (a = b)
+        | [ a; b ] -> wrap context (a = b)
         | _ -> ValueNone
     )
-    addPred ("\=", 2) (fun _ args ->
+    addPred ("\=", 2) (fun context args ->
         match args with
-        | [ a; b ] -> wrap (a <> b)
+        | [ a; b ] -> wrap context (a <> b)
         | _ -> ValueNone
     )
     
@@ -200,7 +200,7 @@ let defaultTerms() =
             let evaluatedA = evaluateExpr context a
             let evaluatedB = evaluateExpr context b
             
-            wrap (evaluatedA = evaluatedB)
+            wrap context (evaluatedA = evaluatedB)
         | _ -> ValueNone
     )
     
@@ -212,9 +212,9 @@ let defaultTerms() =
 
             if hasFreeVariables left then
                 unify left evaluatedRight
-                |> ValueOption.map Seq.singleton
+                |> ValueOption.map (fun frame -> Seq.singleton (frame, context.substitutions))
             else
-                wrap (left = evaluatedRight)
+                wrap context (left = evaluatedRight)
             
         | _ -> ValueNone
     )
@@ -256,6 +256,7 @@ let defaultTerms() =
                                 unify b length
                                 |> ValueOption.map (Array.append q)
                             )
+                            |> ValueOption.map (fun frame -> frame, context.substitutions)
 
                         match results with
                         | ValueSome r -> yield r
@@ -272,19 +273,19 @@ let defaultTerms() =
                         else int (string length)
                     let constructed = ListTerm (List.init size (fun _ -> Atom "nil"))
                     unify a constructed
-                    |> ValueOption.map Seq.singleton
+                    |> ValueOption.map (fun frame -> Seq.singleton (frame, context.substitutions))
                 | _ -> ValueNone
             
             | false, true ->
                 match a, b with
                 | Eval context (ListTerm values), Variable b ->
-                    ValueSome [| [| b, Number (BigFloat.Decimal (BigDecimal values.Length)) |] |]
+                    ValueSome [| [| b, Number (BigFloat.Decimal (BigDecimal values.Length)) |], context.substitutions |]
                 | _ -> ValueNone
 
             | false, false ->
                 match a, b with
                 | Eval context (ListTerm values), Eval context (Number length) ->
-                    wrap (BigFloat.Decimal (BigDecimal values.Length) = length)
+                    wrap context (BigFloat.Decimal (BigDecimal values.Length) = length)
                 | _ -> ValueNone
             
         | _ -> ValueNone
@@ -314,6 +315,7 @@ let defaultTerms() =
                                     unify b (ListTerm suffix)
                                     |> ValueOption.map (Array.append q)
                                 )
+                                |> ValueOption.map (fun frame -> frame, context.substitutions)
 
                             match vars with
                             | ValueSome vars -> yield vars
@@ -332,10 +334,25 @@ let defaultTerms() =
                  match a, b with
                  | Eval context (ListTerm va), Eval context (ListTerm vb) ->
                      unify c (ListTerm (List.append va vb))
-                     |> ValueOption.map Seq.singleton
+                     |> ValueOption.map (fun frame -> Seq.singleton (frame, context.substitutions))
                  | _ -> ValueNone
             | _ -> ValueNone
         
+        | _ -> ValueNone
+    )
+    
+    describe "element" "element(+List, ?Value)" "Determines if an element is contained by the list or lists all elements."
+    addPred ("element", 2) (fun context args ->
+        match args with
+        | [ Eval context (ListTerm items); value ] ->
+            seq {
+                for item in items do
+                    match unify item value with
+                    | ValueSome bindings -> yield bindings, context.substitutions
+                    | ValueNone -> ()
+            }
+            |> Seq.noneIfEmpty
+            
         | _ -> ValueNone
     )
     

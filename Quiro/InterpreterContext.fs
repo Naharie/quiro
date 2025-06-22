@@ -15,7 +15,7 @@ type DebugLevel =
 /// The instantiated form of a predicate or function.
 type InstantiatedCompound = string * Term
 
-type NativePredicate = InterpreterContext -> Term list -> (Var * Term)[] seq voption
+type NativePredicate = InterpreterContext -> Term list -> ((Var * Term)[] * (Var * Term)[]) seq voption
 type NativeFunction = InterpreterContext -> Term list -> Term voption
 
 type InterpreterContext = {

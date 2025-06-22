@@ -161,3 +161,4 @@ let rec query (target: Term) (terms: StoredRules) (debugLevel: DebugLevel) =
         |> Array.map (fun var -> var, Variable var)
 
     tryProveGoal context target queryVariables
+    |> ValueOption.map (Seq.map fst)
