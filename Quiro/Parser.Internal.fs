@@ -36,12 +36,9 @@ let pos = getPosition |>> fun pos -> {
 }
 let maybe parser = (parser >>% true) <|>% false
 
-let exprAST parser =
+let termAST parser =
     pos .>>. parser |>> fun (location, kind) ->
-        { exprKind = kind; location = location }
-let goalAST parser =
-    pos .>>. parser |>> fun (location, kind) ->
-        { goalKind = kind; location = location }
+        { termKind = kind; location = location }
 let dcgAST parser =
     pos .>>. parser |>> fun (location, kind) ->
         { dcgKind = kind; location = location }
@@ -69,7 +66,7 @@ let atomExpr, atomParser =
         
         unwrappedAtom <|> wrappedAtom
         
-    let atomTerm: _ Parser = exprAST (atomParser |>> ExprAtom) <?> "atom"
+    let atomTerm: _ Parser = termAST (atomParser |>> ExprAtom) <?> "atom"
 
     (atomTerm, atomParser)
 
@@ -96,7 +93,7 @@ let numberExpr: _ Parser =
 
             ExprNumber (BigFloat.Decimal number)
         )
-    |> exprAST
+    |> termAST
 
 let textExpr: _ Parser =
     let quote = skipChar '"'
@@ -113,14 +110,13 @@ let textExpr: _ Parser =
     between quote quote (manyChars (unescapedChar <|> escapedChar))
     |>> ExprText
     <?> "string"
-    |> exprAST
+    |> termAST
 
-let expr, exprRef = createParserForwardedToRef() : Parser<PrologExprAST> * Parser<PrologExprAST> ref
+let term, termRef = createParserForwardedToRef() : Parser<TermAST> * Parser<TermAST> ref
 
 let placeholder : _ Parser =
     eof <|> lookAhead (newline .>>. newline |>> ignore) >>= allowIfLanguageServer
-let placeholderExpr = placeholder >>. preturn ExprPlaceholder |> exprAST
-let placeholderGoal = placeholder >>. preturn GoalPlaceholder |> goalAST
+let placeholderExpr = placeholder >>. preturn ExprPlaceholder |> termAST
 
 let variableExpr, variableParser =
     let headChar = upper <|> pchar '_'
@@ -132,7 +128,7 @@ let variableExpr, variableParser =
 
     let variableExpression =
         variableParser |>> ExprVariable <?> "variable"
-        |> exprAST
+        |> termAST
     
     variableExpression, variableParser
 
@@ -142,38 +138,36 @@ let listParser, listExpression: _ Parser * _ Parser =
     let separator = skipChar ','
     
     let listParser =
-        between startList endList (sepBy expr separator)
+        between startList endList (sepBy term separator)
         <?> "list"
     
-    listParser, exprAST (listParser |>> ExprListTerm)
+    listParser, termAST (listParser |>> ExprListTerm)
 
 let listConsExpr: _ Parser =
-    skipChar '[' >>. ws >>. expr .>> ws .>> skipChar '|' .>> ws .>>. expr .>> ws .>> (skipChar ']' <|> placeholder)
+    skipChar '[' >>. ws >>. term .>> ws .>> skipChar '|' .>> ws .>>. term .>> ws .>> (skipChar ']' <|> placeholder)
     |>> ExprListCons
     <?> "list cons"
-    |> exprAST
+    |> termAST
 
 let termOrAtom: _ Parser =
     let startArgs = skipChar '('
     let endArgs = (skipChar ')' <|> placeholder)
     let separator = skipChar ','
     
-    atomParser .>>. opt (between startArgs endArgs (sepBy expr separator))
+    atomParser .>>. opt (between startArgs endArgs (sepBy term separator))
 let termOrAtomExpr: _ Parser =
     termOrAtom
     |>> fun (functor, args) ->
         match args with
         | Some args -> ExprTerm(functor, args)
         | None -> ExprAtom functor
-    |> exprAST
+    |> termAST
 
-let goal, goalRef = createParserForwardedToRef() : Parser<PrologGoalAST> * Parser<PrologGoalAST> ref
+let parenExpr = skipChar '(' >>. ws >>. term .>> ws .>> (skipChar ')' <|> placeholder)
 
-let parenExpr = skipChar '(' >>. ws >>. expr .>> ws .>> (skipChar ')' <|> placeholder)
+let expression = OperatorPrecedenceParser<TermAST, FileLocation, unit>()
 
-let expression = OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>()
-
-let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<PrologExprAST, FileLocation, unit>) =
+let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<TermAST, FileLocation, unit>) =
     let op name precedence =
         let opPos =
             getPosition
@@ -186,7 +180,7 @@ let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<PrologE
                 }
 
         operatorExpression.AddOperator(InfixOperator(name, opPos, precedence, Associativity.Left, (), fun pos a b ->
-            { exprKind = ExprTerm(name, [ a; b ]); location = pos }))
+            { termKind = ExprTerm(name, [ a; b ]); location = pos }))
     
     op "+" 200
     op "-" 200
@@ -212,13 +206,15 @@ expression.TermParser <- ws >>. choice [
 
 addExpressionOperators expression
 
-exprRef.Value <- expression.ExpressionParser
+termRef.Value <- expression.ExpressionParser
 
 // Goals
 
+let goal, goalRef = createParserForwardedToRef() : Parser<TermAST> * Parser<TermAST> ref
+
 let comparisonGoal: _ Parser =
     pipe3
-        expr
+        term
         (choice [
             pstring "<"
             pstring "<="
@@ -227,40 +223,40 @@ let comparisonGoal: _ Parser =
             (attempt (pstring "=:=") <|> pstring "=")
             pstring "\="
             pstring "is"
-        ]) expr
-        (fun exprA op exprB -> GoalSimple(op, [ exprA; exprB ]))
-    |> goalAST
+        ]) term
+        (fun exprA op exprB -> ExprTerm(op, [ exprA; exprB ]))
+    |> termAST
 let simpleGoal: _ Parser =
     termOrAtom
     |>> fun (functor, args) ->
-        GoalSimple(functor, args |> Option.defaultValue List.empty)
-    |> goalAST
+        ExprTerm(functor, args |> Option.defaultValue List.empty)
+    |> termAST
 let negatedGoal: _ Parser =
     skipString "\+" .>> ws >>. goal
-    |>> GoalNegated
-    |> goalAST
+    |>> ExprNegation
+    |> termAST
 
-let junctionGoal = OperatorPrecedenceParser<PrologGoalAST, unit, unit>()
+let junctionGoal = OperatorPrecedenceParser<TermAST, unit, unit>()
 
 junctionGoal.AddOperator(InfixOperator(",", ws, 1100, Associativity.Left, fun a b ->
     {
-        goalKind =
-            match a.goalKind with
-            | GoalConjunction parts ->
-                GoalConjunction (Array.append parts [| b |])
+        termKind =
+            match a.termKind with
+            | ExprConjunction parts ->
+                ExprConjunction (Array.append parts [| b |])
             | _ ->
-                GoalConjunction([| a; b |])
+                ExprConjunction([| a; b |])
         location = a.location
     }
 ))
 junctionGoal.AddOperator(InfixOperator(";", ws, 1000, Associativity.Left, fun a b ->
     {
-        goalKind =
-            match a.goalKind with
-            | GoalDisjunction parts ->
-                GoalDisjunction (Array.append parts [| b |])
+        termKind =
+            match a.termKind with
+            | ExprDisjunction parts ->
+                ExprDisjunction (Array.append parts [| b |])
             | _ ->
-                GoalDisjunction([| a; b |])
+                ExprDisjunction ([| a; b |])
         location = a.location
     }
 ))
@@ -270,7 +266,7 @@ junctionGoal.TermParser <- (choice [
     negatedGoal
     (attempt comparisonGoal)
     simpleGoal
-    placeholderGoal
+    placeholderExpr
 ])
 
 goalRef.Value <- junctionGoal.ExpressionParser
@@ -302,10 +298,10 @@ let dcgSequence =
 dcgRef.Value <- dcgSequence
 
 let declaration: _ Parser =
-    pos .>>. termOrAtom .>> ws .>>. opt (choice [
+    ws >>. pos .>>. termOrAtom .>> ws .>>. opt (choice [
         skipString ":-" >>. ws >>. goal |>> Choice1Of2
         skipString "-->" >>. ws >>. dcg |>> Choice2Of2
-    ]) .>> ws .>> skipChar '.'
+    ]) .>> ws .>> skipChar '.' .>> ws
     |>> fun ((position, (functor, args)), body) ->
         let args = args |> Option.defaultValue List.empty
 
@@ -318,7 +314,7 @@ let declaration: _ Parser =
                  DCGDeclaration(functor, args, expression)
         | None ->
             PredicateDeclaration (functor, args, {
-                goalKind = GoalSimple ("true", List.empty)
+                termKind = ExprAtom "true"
                 location = position
             })
 

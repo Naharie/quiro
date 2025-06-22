@@ -1,10 +1,12 @@
 [<CompilationRepresentation (CompilationRepresentationFlags.ModuleSuffix)>]
 module Quiro.Interpreter
 
+open System.Collections.Generic
+open Microsoft.FSharp.Core
 open Quiro.AST
 open Quiro.Interpreter.Internal
 
-let private savePredicate (terms: StoredTerms) (functor: string) (args: PrologValue list) (body: Goal) =
+let private savePredicate (terms: StoredRules) (functor: string) (args: Term list) (body: Term) =
     let key = (functor, args.Length)
         
     match terms.userPredicates.TryGetValue key with
@@ -16,11 +18,23 @@ let private savePredicate (terms: StoredTerms) (functor: string) (args: PrologVa
         terms.userPredicates[key] <- container
 
 /// Save a declaration to the list of known terms.
-let storeDeclaration declaration (terms: StoredTerms) =
+let storeDeclaration declaration (terms: StoredRules) =
     match declaration with
     | PredicateDeclaration (functor, args, body) ->
-        let reifiedArgs = List.map reifyExpr args
-        let reifiedBody = reifyGoal body
+        let vars = Dictionary()
+        
+        let reifiedArgs = List.map (reifyTerm vars) args
+        let reifiedBody = reifyTerm vars body
+
+        let makeError() =
+            $"(%s{body.location.file}, line %i{body.location.line}, column %i{body.location.column})"
+
+        match reifiedBody with
+        | Number _ -> raise (PrologException $"Expected an invocable but found a number instead! %s{makeError()}")
+        | Text _ -> raise (PrologException $"Expected an invocable but found a string instead! %s{makeError()}")
+        | Variable _ -> raise (PrologException $"Expected an invocable but found a variable instead! %s{makeError()}")
+        | ListCons _ | ListTerm _ -> raise (PrologException $"Expected an invocable but found a list instead! %s{makeError()}")
+        | _ -> ()
         
         savePredicate terms functor reifiedArgs reifiedBody
 
@@ -39,28 +53,38 @@ let storeDeclaration declaration (terms: StoredTerms) =
                 
             checkDCG body
         
-        let reifiedArgs = args |> List.map reifyExpr
-        let reifiedBody = reifyDCG body
+        let vars = Dictionary()
+        
+        let reifiedArgs = args |> List.map (reifyTerm vars)
+        let reifiedBody = reifyDCG vars body
+        
+        let var (i: int) =
+            let name = "S" + string i
+            let mutable var = Unchecked.defaultof<Term>
+            
+            if not (vars.TryGetValue (name, &var)) then
+                var <- Term.makeVar name
+                vars[name] <- var
+                
+            var
         
         let rec convertDCG start isFirstVarTerm dcg =
-            let var (i: int) =
-                Variable ("S" + (string i))
             
             match dcg with
             | DCG.Term term ->
-                start + 1, SimpleGoal(term, [ var start; var (start + 1) ])
+                start + 1, Term(term, [ var start; var (start + 1) ])
 
             | DCG.Call (functor, args) ->
                 if isFirstVarTerm then
-                    start, SimpleGoal(functor, List.append args [ var start ])
+                    start, Term(functor, List.append args [ var start ])
                 else
-                    start + 2, ConjunctionGoal [|
-                        SimpleGoal(functor, List.append args [ var (start + 1) ])
-                        SimpleGoal("append", [ var start; var (start + 1); var (start + 2) ])
+                    start + 2, Conjunction [|
+                        Term(functor, List.append args [ var (start + 1) ])
+                        Term("append", [ var start; var (start + 1); var (start + 2) ])
                     |]
 
             | DCG.List values ->
-                start + 1, SimpleGoal("append", [ var start; ListTerm values; var (start + 1) ])
+                start + 1, Term("append", [ var start; ListTerm values; var (start + 1) ])
                 
             | DCG.Goal goal -> start, goal
                 
@@ -68,7 +92,7 @@ let storeDeclaration declaration (terms: StoredTerms) =
                 let mutable counter = start
                 let mutable isFirstVarTerm = true
                 
-                let goal = ConjunctionGoal [|
+                let goal = Conjunction [|
                     for term in dcgTerms do
                         let next, converted = convertDCG counter isFirstVarTerm term
                         
@@ -85,51 +109,55 @@ let storeDeclaration declaration (terms: StoredTerms) =
         if reifiedArgs.Length = 0 then
             match reifiedBody with
             | DCG.Term term ->
-                let args = [ Variable "S1"; Variable "S2" ]
-                savePredicate terms functor args (SimpleGoal(term, args))
+                let args = [ var 1; var 2 ]
+                savePredicate terms functor args (Term(term, args))
 
             | DCG.Call _ ->
                 let finalVar, body = convertDCG  1 true reifiedBody
-                savePredicate terms functor [ Variable "S1"; Variable ("S" + string finalVar) ] body
+                savePredicate terms functor [ var 1; var finalVar ] body
             
             | DCG.List values ->
-                let arg = List.foldBack (fun element tail -> ListCons(element, tail)) values (Variable "X")
-                savePredicate terms functor [ arg; Variable "X" ] (SimpleGoal("true", List.empty))
+                let arg = List.foldBack (fun element tail -> ListCons(element, tail)) values (var 1)
+                savePredicate terms functor [ arg; var 1 ] (Term("true", List.empty))
                 
             | DCG.Goal goal ->
-                savePredicate terms functor [ Variable "S1"; Variable "S2" ] goal
+                savePredicate terms functor [ var 1; var 2 ] goal
                 
             | DCG.Sequence _ ->
                 let finalVar, body = convertDCG 1 true reifiedBody
-                savePredicate terms functor [ Variable "S1"; Variable ("S" + string finalVar) ] body
+                savePredicate terms functor [ var 1; var finalVar ] body
         else
             match reifiedBody with
             | DCG.Term _ ->
-                raise (PrologException $"DCG definitions with explicit arguments may not invoke terms without explicit arguments (unknown file and location")
+                raise (PrologException "DCG definitions with explicit arguments may not invoke terms without explicit arguments (unknown file and location")
 
             | DCG.Call _ ->
                 let _, body = convertDCG 1 true reifiedBody
-                savePredicate terms functor (List.append reifiedArgs [ Variable "S1"; ]) body
+                savePredicate terms functor (List.append reifiedArgs [ var 1; ]) body
             
             | DCG.List values ->
-                savePredicate terms functor (List.append reifiedArgs [ Variable "S1" ]) (SimpleGoal("is", [ Variable "S1"; ListTerm values ]))
+                savePredicate terms functor (List.append reifiedArgs [ var 1 ]) (Term("is", [ var 1; ListTerm values ]))
                 
             | DCG.Goal goal ->
                 savePredicate terms functor reifiedArgs goal
 
             | DCG.Sequence _ ->
                 let finalVar, body = convertDCG 1 true reifiedBody
-                savePredicate terms functor (List.append reifiedArgs [ Variable ("S" + string finalVar) ]) body
+                savePredicate terms functor (List.append reifiedArgs [ var finalVar ]) body
 
 /// Determine whether a given query is provable or not.
-let rec query (target: Goal) (terms: StoredTerms) (debugLevel: DebugLevel): Map<string, PrologValue> seq voption =    
+let rec query (target: Term) (terms: StoredRules) (debugLevel: DebugLevel) =  
     let context = {
         debugLevel = debugLevel
         
         terms = terms
-        scope = Scope.empty
+        substitutions = Array.empty
 
         stack = []
     }
-    
-    tryProveGoal context target
+
+    let queryVariables =
+        collectVars target
+        |> Array.map (fun var -> var, Variable var)
+
+    tryProveGoal context target queryVariables

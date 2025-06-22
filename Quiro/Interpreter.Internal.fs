@@ -3,174 +3,147 @@ module rec Quiro.Interpreter.Internal
 open System
 open System.Collections.Generic
 open Functional
+open Microsoft.FSharp.Collections
 open Microsoft.FSharp.Core
+open Microsoft.FSharp.Quotations
 open Quiro
 open Quiro.AST
 
-let rec reifyExpr (ast: PrologExprAST): PrologValue =
-    match ast.exprKind with
+let rec reifyTerm (vars: Dictionary<string, Term>) (ast: TermAST): Term =
+    match ast.termKind with
     | ExprAtom atom -> Atom atom
     | ExprNumber number -> Number number
     | ExprText text -> Text text
-    | ExprListTerm elements -> ListTerm (List.map reifyExpr elements)
-    | ExprTerm (functor, args) -> Term(functor, List.map reifyExpr args)
-    | ExprVariable variable -> Variable variable
-    | ExprListCons (head, tail) -> ListCons(reifyExpr head, reifyExpr tail)
+    | ExprListTerm elements -> ListTerm (List.map (reifyTerm vars) elements)
+    | ExprTerm (functor, args) -> Term(functor, List.map (reifyTerm vars) args)
+    | ExprVariable name ->
+        vars.TryFind name
+        |> ValueOption.defaultWith (fun () ->
+            let var = Term.makeVar name
+            vars[name] <- var
+            var
+        )
+    | ExprListCons (head, tail) -> ListCons(reifyTerm vars head, reifyTerm vars tail)
+    | ExprNegation term -> Negation(reifyTerm vars term)
+    | ExprConjunction terms -> Conjunction(terms |> Array.map (reifyTerm vars))
+    | ExprDisjunction terms -> Disjunction(terms |> Array.map (reifyTerm vars))
     | ExprPlaceholder ->
         raise (PrologException $"Incomplete expression (line %i{ast.location.line}, column %i{ast.location.column})")
-let reifyGoal (ast: PrologGoalAST): Goal =
-    match ast.goalKind with
-    | GoalSimple (functor, args) -> SimpleGoal(functor, List.map reifyExpr args)
-    | GoalNegated goal -> NegatedGoal (reifyGoal goal)
-    
-    | GoalConjunction goals -> ConjunctionGoal(Array.map reifyGoal goals)
-    | GoalDisjunction goals -> DisjunctionGoal(Array.map reifyGoal goals)
-    
-    | GoalPlaceholder ->
-        raise (PrologException $"Incomplete goal (line %i{ast.location.line}, column %i{ast.location.column})")
-let reifyDCG (ast: DCGAST) =
+let reifyDCG (vars: Dictionary<string, Term>) (ast: DCGAST) =
     match ast.dcgKind with
     | DCGTerm term -> DCG.Term term
-    | DCGCall (functor, args) -> DCG.Call(functor, args |> List.map reifyExpr)
-    | DCGGoal goal -> DCG.Goal (reifyGoal goal)
-    | DCGList values -> DCG.List (values |> List.map reifyExpr)
-    | DCGSequence nested -> DCG.Sequence (nested |> Array.map reifyDCG)
+    | DCGCall (functor, args) -> DCG.Call(functor, args |> List.map (reifyTerm vars))
+    | DCGGoal goal -> DCG.Goal (reifyTerm vars goal)
+    | DCGList values -> DCG.List (values |> List.map (reifyTerm vars))
+    | DCGSequence nested -> DCG.Sequence (nested |> Array.map (reifyDCG vars))
 
-let writeDebugInformation indentation (text: string) =
-    let prefix = String.replicate indentation "\t"
-    Console.Write(prefix)
-    Console.WriteLine(text)
-
-/// Substitutes all variables in the given goal that are defined in the provided scope.
-let rec substituteVariablesInGoal (scope: Scope) (goal: Goal) =
-    match goal with
-    | SimpleGoal(functor, args) ->
-        SimpleGoal(functor, args |> List.map(substituteVariablesInExpression scope))
-    | NegatedGoal goal -> NegatedGoal (substituteVariablesInGoal scope goal)
-    | ConjunctionGoal goals ->
-        ConjunctionGoal(goals |> Array.map (substituteVariablesInGoal scope))
-    | DisjunctionGoal goals ->
-        DisjunctionGoal(goals |> Array.map (substituteVariablesInGoal scope))
-/// Substitutes all variables in the given expression that are defined in the provided scope.
-let rec substituteVariablesInExpression (scope: Scope) (expr: PrologValue) =
+let rec substitute (var: Var) (value: Term) (expr: Term) =
     match expr with
     | Atom _
     | Number _
     | Text _ -> expr
     
+    | Variable otherVar ->
+        if var = otherVar then value else expr
+    
+    | ListCons (head, tail) ->
+        ListCons(substitute var value head, substitute var value tail)
     | ListTerm values ->
-        ListTerm (values |> List.map (substituteVariablesInExpression scope))
+        ListTerm (values |> List.map (substitute var value))
     
     | Term(target, args) ->
-        Term(target, args |> List.map (substituteVariablesInExpression scope))
-    
-    | Variable name ->
-        scope
-        |> Scope.lookupValue name
-        |> ValueOption.defaultValue expr
-        
-    | ListCons (head, tail) ->
-        ListCons(substituteVariablesInExpression scope head, substituteVariablesInExpression scope tail)
+        Term(target, args |> List.map (substitute var value))
+    | Negation term -> Negation(substitute var value term)
+    | Conjunction terms -> Conjunction (terms |> Array.map (substitute var value))
+    | Disjunction terms -> Disjunction (terms |> Array.map (substitute var value))
 
-let private mergeBindings a b =
-    a |> ValueOption.bind (fun a ->
-        b |> ValueOption.bind (
-            Map.fold (fun map key value ->
-                match map with
-                | ValueNone -> ValueNone
-                | ValueSome map ->
-                    match map |> Map.tryFind key with
-                    | None ->
-                        map |> Map.add key value |> ValueSome
-                    | Some existing ->
-                        if value = existing then ValueSome map else ValueNone
-            ) (ValueSome a)
-        )
-    )    
-
-[<Struct>] type OutVarSupport = InVarOnly | AllowOutVar
-
-let hasFreeVariables scope expr =
+let rec containsVar var expr =
     match expr with
     | Atom _ | Number _ | Text _ -> false
-    | Variable var -> (Scope.lookupValue var scope) = ValueNone
+    | Variable otherVar -> var = otherVar
+    | ListCons(head, tail) -> containsVar var head || containsVar var tail
+    | ListTerm(values) | Term(_, values) -> values |> List.exists (containsVar var)
+    | Negation term -> containsVar var term
+    | Conjunction terms | Disjunction terms -> terms |> Array.exists (containsVar var)
+let collectVars expr =
+    let vars = HashSet<Var>()
     
-    | ListCons(a, b) -> hasFreeVariables scope a || hasFreeVariables scope b
-    
-    | ListTerm values
-    | Term (_, values) -> values |> List.exists (hasFreeVariables scope)
+    let rec go expr =
+        match expr with
+        | Atom _ | Number _ | Text _ -> ()
+        | Variable var -> vars.Add var |> ignore
+        | ListCons(head, tail) -> go head; go tail
+        | ListTerm items | Term(_, items) -> items |> List.iter go
+        | Negation term -> go term
+        | Conjunction terms | Disjunction terms -> terms |> Array.iter go
 
-let rec assignVarFromValue (scope: Scope) (outVar: OutVarSupport) (var: PrologValue) (value: PrologValue) =
-    if hasFreeVariables scope value then
-        match outVar with
-        | InVarOnly -> ValueNone
-        | AllowOutVar -> ValueSome Map.empty
-    else
-    
-    match var with
-    | Variable "_" -> ValueSome Map.empty
-    | Variable name -> Map.ofArray [| name, value |] |> ValueSome 
-    
-    | ListCons (varHead, varTail) ->
-        match value with
-        | ListCons (valueHead, valueTail) | ListTerm (valueHead :: Wrap ListTerm valueTail) ->
-            mergeBindings
-                (assignVarFromValue scope outVar varHead valueHead)
-                (assignVarFromValue scope outVar varTail valueTail)
-                
-        | Variable _ when outVar.IsAllowOutVar -> ValueSome Map.empty
-        | _ -> ValueNone
+    go expr
+    vars |> Seq.toArray
+let hasFreeVariables expr =
+    match expr with
+    | Atom _ | Number _ | Text _ -> false
+    | Variable _ -> true
+    | ListCons(head, tail) -> hasFreeVariables head || hasFreeVariables tail
+    | ListTerm items | Term(_, items) -> items |> List.exists hasFreeVariables
+    | Negation term -> hasFreeVariables term
+    | Conjunction terms | Disjunction terms -> terms |> Array.exists hasFreeVariables
 
-    | ListTerm varItems ->
-        match value with
-        | ListTerm valueItems ->
-            if varItems.Length <> valueItems.Length then ValueNone
-            else assignVarsFromValues scope outVar varItems valueItems
-
-        | ListCons (valueHead, valueTail) ->
-            match varItems with
-            | varHead :: varTail ->
-                mergeBindings
-                    (assignVarFromValue scope outVar varHead valueHead)
-                    (assignVarFromValue scope outVar (ListTerm varTail) valueTail)
-            | [] -> ValueNone
-            
-        | Variable _ when outVar.IsAllowOutVar -> ValueSome Map.empty
-        | _ -> ValueNone
+let rec unify (left: Term) (right: Term) =
+    match left, right with
+    | l, r when l = r -> ValueSome [||]
     
-    | Term(varFunctor, varParameters) ->
-        match value with
-        | Term(valueFunctor, valueParameters) ->
-            if varFunctor = "_" || varFunctor = valueFunctor then
-                assignVarsFromValues scope outVar varParameters valueParameters
-            else ValueNone
-            
-        | Variable _ when outVar.IsAllowOutVar -> ValueSome Map.empty
-        | _ -> ValueNone
+    | Variable (Var("_", _)), _
+    | _, Variable(Var("_", _))
+    | Atom "nil", ListTerm []
+    | ListTerm [], Atom "nil" -> ValueSome [||]
     
-    | _ ->
-        if outVar.IsAllowOutVar && value.IsVariable || var = value then
-            ValueSome (Map.ofArray Array.empty)
-        else
-            ValueNone
-let rec assignVarsFromValues (scope: Scope) (outVar: OutVarSupport) (vars: PrologValue list) (values: PrologValue list) =
-    if vars.Length <> values.Length then
-        ValueNone
-    else
-        List.fold2 (fun bindings varItem valueItem ->
-            match bindings with
-            | ValueNone -> ValueNone
-            | ValueSome _ ->
-                mergeBindings bindings (assignVarFromValue scope outVar varItem valueItem)
-        ) (ValueSome Map.empty) vars values
+    | Variable var, other | other, Variable var ->
+        if containsVar var other then ValueNone
+        else ValueSome [| (var, other) |]
+    
+    | ListCons (lHead, lTail), ListCons(rHead, rTail)
+    | ListCons (lHead, lTail), ListTerm(rHead :: Wrap ListTerm rTail)
+    | ListTerm (lHead :: Wrap ListTerm lTail), ListCons (rHead, rTail) ->
+        unify lHead rHead
+        |> ValueOption.bind (fun subA ->
+            unify lTail rTail
+            |> ValueOption.map (Array.append subA)
+        )
 
-let emptySuccess = [| Map.empty |]
+    | ListTerm lItems, ListTerm rItems ->
+        if lItems.Length <> rItems.Length then ValueNone
+        else unifyMany lItems rItems
+
+    | Term(lFunc, lArgs), Term(rFunc, rArgs) ->
+        if lFunc <> rFunc || lArgs.Length <> rArgs.Length then ValueNone
+        else unifyMany lArgs rArgs
+
+    | Negation lTerm, Negation rTerm -> unify lTerm rTerm
+    | Conjunction lTerms, Conjunction rTerms
+    | Disjunction lTerms, Disjunction rTerms ->
+        Array.map2 (fun a b -> ValueOption.toOption (unify a b)) lTerms rTerms
+        |> Array.choose id
+        |> Array.collect id
+        |> ValueSome
+    
+    | _, _ -> ValueNone
+let rec unifyMany (left: Term list) (right: Term list) =
+    let left = List.toArray left
+    let right = List.toArray right
+    
+    Array.map2 (fun a b -> ValueOption.toOption (unify a b)) left right
+    |> Array.choose id
+    |> fun results ->
+        if results.Length = 0 then ValueNone
+        else ValueSome results
+    |> ValueOption.map (Array.collect id)
 
 let evaluateExpr (context: InterpreterContext) expr =
     match expr with
     | Atom _
     | Number _
-    | Text _ -> expr
+    | Text _
+    | Variable _ -> expr
     
     | ListCons(head, tail) ->
         let evaluatedHead = evaluateExpr context head
@@ -186,94 +159,92 @@ let evaluateExpr (context: InterpreterContext) expr =
     
     | ListTerm values ->
         ListTerm (values |> List.map (evaluateExpr context))
-        
-    | Variable name ->
-        Scope.lookupValue name context.scope
-        |> ValueOption.map (evaluateExpr context)
-        |> ValueOption.defaultValue expr
 
     | Term (functor, args) ->
-        let functions = StoredTerms.lookupFunctions context.terms (functor, args.Length)
+        let functions = StoredRules.lookupFunctions context.terms (functor, args.Length)
         
         if functions.Count = 0 then expr
         else
             functions
             |> Seq.tryPick (fun func -> func context args |> Option.ofValueOption)
             |> Option.defaultValue expr
+            
+    | Negation _ -> raise (PrologException "Expected an expression term, but found a negation query!")
+    | Conjunction _ -> raise (PrologException "Expected an expression term, but found a conjunction query!")
+    | Disjunction _ -> raise (PrologException "Expected an expression term, but found a disjunction query!")
 
-let tryProvePredicate (context: InterpreterContext) predicate argValues: Map<string, PrologValue> seq voption =
-    let args, test = predicate                 
-    let potentialBindings = assignVarsFromValues context.scope AllowOutVar args argValues
+let (|AtomOrTerm|_|) atom value =
+    match value with
+    | Atom name | Term(name, _) when name = atom -> Some ()
+    | _ -> None
+
+let tryProvePredicate (context: InterpreterContext) (predicate: Term list * Term) argValues substitutions =
+    let args, body = predicate                 
+    let potentialBindings = unifyMany args argValues
 
     match potentialBindings with
-    | ValueSome bindings ->
-        match test with
-        | SimpleGoal ("true", []) ->
-            let updatedScope = { parent = None; values = bindings }
-            let instantiatedArgs = args |> List.map (substituteVariablesInExpression updatedScope)
-            let resultingBindings = assignVarsFromValues updatedScope InVarOnly argValues instantiatedArgs
-
-            match resultingBindings with
-            | ValueSome producedBindings ->
-                ValueSome [| producedBindings |]
-            | ValueNone -> ValueNone
-        | SimpleGoal ("false", []) -> ValueNone
-        | _ ->
-            let contextWithBindings = { context with scope = { parent = None; values = bindings } }
-            
-            match tryProveGoal contextWithBindings test with
-            | ValueSome testGoalBindings ->
-                testGoalBindings
-                |> Seq.choose (fun bindingSet ->
-                    let childScope = contextWithBindings.scope.CreateChild bindingSet
-                    let instantiatedArgs = args |> List.map (substituteVariablesInExpression childScope)
-                    let resultingBindings = assignVarsFromValues childScope InVarOnly argValues instantiatedArgs
-
-                    resultingBindings
-                    |> Option.ofValueOption
-                )
-                |> Seq.noneIfEmpty
-
-            | ValueNone -> ValueNone
     | ValueNone -> ValueNone
-let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
+    | ValueSome bindings ->
+        let instantiatedBody =
+            bindings
+            |> Array.fold (fun body (var, value) -> substitute var value body) body
+        let instantiatedSubstitutions =
+            substitutions
+            |> Array.map (fun (before, after) ->
+                let updatedAfter =
+                    bindings
+                    |> Array.fold (fun body (var, value) -> substitute var value body) after
+                    
+                before, updatedAfter
+            )
+        
+        tryProveGoal context instantiatedBody instantiatedSubstitutions
+let rec tryProveGoal context goal (substitutions: (Var * Term)[])  =
     match goal with
-    | SimpleGoal (("true" | "repeat" | "!"), []) -> ValueSome emptySuccess
-    | SimpleGoal (("false" | "fail"), []) -> ValueNone
+    | Number _ -> raise (PrologException "Expected an invocable but found a number instead!")
+    | Text _ -> raise (PrologException "Expected an invocable but found a string instead!")
+    | Variable _ -> raise (PrologException "Expected an invocable but found a variable instead!")
+    | ListCons _ | ListTerm _ -> raise (PrologException "Expected an invocable but found a list instead!")
+        
+    | AtomOrTerm "true" | AtomOrTerm "repeat" | AtomOrTerm "!" -> ValueSome (Seq.singleton substitutions)
+    | AtomOrTerm "false" | AtomOrTerm "fail" -> ValueNone
 
-    | SimpleGoal (functor, argValues) ->
+    | Term (functor, argValues) | Pair [] (argValues, Atom functor) ->
         let key = (functor, argValues.Length)
-        let userPredicates = StoredTerms.lookupPredicates context.terms key
-        let nativePredicates = StoredTerms.lookupNativePredicates context.terms key
+        let userPredicates = StoredRules.lookupPredicates context.terms key
+        let nativePredicates = StoredRules.lookupNativePredicates context.terms key
 
-        let updatedContext = { context with stack = (PredicateFrame key) :: context.stack }
-        let instantiatedArgValues = argValues |> List.map (substituteVariablesInExpression context.scope)
+        let updatedContext = {
+            context with
+                stack = (PredicateFrame key) :: context.stack
+                substitutions = substitutions
+        }
 
         seq {
             for userPredicate in userPredicates do
-                match tryProvePredicate updatedContext userPredicate instantiatedArgValues with
+                match tryProvePredicate updatedContext userPredicate argValues substitutions with
                 | ValueSome newBindings ->
                     yield! newBindings
                 | ValueNone -> ()
 
             for nativePredicate in nativePredicates do
-                match nativePredicate updatedContext instantiatedArgValues with
+                match nativePredicate updatedContext argValues with
                 | ValueSome newBindings ->
                     yield! newBindings
                 | ValueNone -> ()
 
             if functor <> "@meta" then
-                match tryProveGoal context (SimpleGoal ("@meta", [ Atom functor; Atom "var_args" ])) with
+                match tryProveGoal context (Term ("@meta", [ Atom functor; Atom "var_args" ])) substitutions with
                 | ValueSome _ ->
-                    let wrappedArgs = [ ListTerm instantiatedArgValues ]
+                    let wrappedArgs = [ ListTerm argValues ]
                     
-                    for userPredicate in StoredTerms.lookupPredicates context.terms (functor, 1) do
-                        match tryProvePredicate updatedContext userPredicate wrappedArgs with
+                    for userPredicate in StoredRules.lookupPredicates context.terms (functor, 1) do
+                        match tryProvePredicate updatedContext userPredicate wrappedArgs substitutions with
                         | ValueSome newBindings ->
                             yield! newBindings
                         | ValueNone -> ()
                     
-                    for nativePredicate in StoredTerms.lookupNativePredicates context.terms (functor, 1) do
+                    for nativePredicate in StoredRules.lookupNativePredicates context.terms (functor, 1) do
                         match nativePredicate updatedContext wrappedArgs with
                         | ValueSome newBindings ->
                             yield! newBindings
@@ -283,23 +254,21 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
         }
         |> Seq.noneIfEmpty
         
-    | NegatedGoal subGoal ->
-        match tryProveGoal context subGoal with
+    | Negation subGoal ->
+        match tryProveGoal context subGoal substitutions with
         | ValueSome _ -> ValueNone
-        | ValueNone -> ValueSome emptySuccess
-        
-    | ConjunctionGoal goals ->
-        // Note: "repeat" choice points and cuts "!"
-            
+        | ValueNone -> ValueSome [ Array.empty ]
+
+    | Conjunction goals ->
         if goals.Length = 1 then
-            tryProveGoal context goals[0]
+            tryProveGoal context goals[0] substitutions
         else
             seq {
-                let workingSets = Stack<Map<string, PrologValue> seq * IEnumerator<Map<string, PrologValue>> * int>()
+                let workingSets = Stack<(Var * Term)[] seq * IEnumerator<(Var * Term)[]> * int>()
                 let repeats = Stack<_>()
                 let mutable resultCount = 0
-                
-                let initial = [| Map.empty |]
+
+                let initial = [| Array.empty |]
                 workingSets.Push (Seq.ofArray initial, (initial :> IEnumerable<_>).GetEnumerator(), 0)
             
                 while workingSets.Count > 0 do
@@ -316,7 +285,7 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
                         
                         match goal with
                         // A cut means we immediately discard all choice points
-                        | SimpleGoal("!", []) ->
+                        | AtomOrTerm "!" ->
                             let temporary = Stack<_>()
                             
                             while workingSets.Count > 0 do
@@ -332,7 +301,7 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
                                 let source = [| bindingSet |]
                                 workingSets.Push (source, (source :> IEnumerable<_>).GetEnumerator(), goalIndex + 1)
                                 
-                        | SimpleGoal("repeat", []) ->
+                        | AtomOrTerm "repeat" ->
                             repeats.Push(goalIndex, resultCount)
 
                             if goalIndex + 1 < goals.Length then
@@ -340,14 +309,24 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
                                 workingSets.Push (source, enumerator, goalIndex + 1)
                                 
                         | _ ->
-                            let contextWithUpdatedBindings = context.NestScope bindingSet
-                            let potentialGoalResults = tryProveGoal contextWithUpdatedBindings goal
+                            let instantiatedGoal =
+                                bindingSet
+                                |> Array.fold (fun goal (var, value) -> substitute var value goal) goal
+                            let instantiatedSubstitutions =
+                                substitutions
+                                |> Array.map (fun (before, after) ->
+                                    let updatedAfter =
+                                        bindingSet
+                                        |> Array.fold (fun body (var, value) -> substitute var value body) after
+                                        
+                                    before, updatedAfter
+                                )
                             
-                            match potentialGoalResults with
+                            match tryProveGoal context instantiatedGoal instantiatedSubstitutions with
                             | ValueSome goalResults ->
                                 let newBindingSets =
                                     goalResults
-                                    |> Seq.map (Map.merge bindingSet)
+                                    |> Seq.map (Array.append bindingSet)
                                     |> Seq.cache
 
                                 if goalIndex + 1 >= goals.Length then
@@ -360,17 +339,17 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
             }
             |> Seq.noneIfEmpty
     
-    | DisjunctionGoal goals ->
+    | Disjunction goals ->
         seq {
             let mutable index = 0
             let mutable hasResult = false
         
             while index < goals.Length do
                 match goals[index] with
-                | SimpleGoal("!", []) ->
+                | AtomOrTerm "!" ->
                     if hasResult then index <- goals.Length
                 | goal ->
-                    match tryProveGoal context goal with
+                    match tryProveGoal context goal substitutions with
                     | ValueSome results ->
                         hasResult <- true
                         yield! results
@@ -379,3 +358,5 @@ let rec tryProveGoal context goal : Map<string, PrologValue> seq voption =
                 index <- index + 1
         }
         |> Seq.noneIfEmpty
+        
+    | Atom _ -> raise (PrologException "Expected an invocable but found an atom instead!")

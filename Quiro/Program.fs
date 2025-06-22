@@ -1,4 +1,5 @@
 ﻿open System
+open System.Collections.Generic
 open System.IO
 open Quiro
 open Quiro.BuiltinTerms
@@ -48,7 +49,8 @@ let main args =
             match Parser.parseGoal "<repl>" code with
             | Ok goalAST ->
                 let debugLevel = if printDebugInfo then RuleOnly else NoDebugInfo
-                let goal = Interpreter.Internal.reifyGoal goalAST
+                let vars = Dictionary()
+                let goal = Interpreter.Internal.reifyTerm vars goalAST
                 
                 try
                     match Interpreter.query goal terms debugLevel with
@@ -56,11 +58,11 @@ let main args =
                         printfn "Yes\r\n"
                         
                         let cached = Seq.cache bindings
-                        let showGroup (bindingGroup: Map<string, PrologValue>) =
-                            for KeyValue(variable, value) in bindingGroup do
-                                printfn $"%s{variable} = %s{PrologValue.toString value}"
+                        let showGroup (bindingGroup: (Var * Term)[]) =
+                            for (Var (variable, _), value) in bindingGroup do
+                                printfn $"%s{variable} = %s{Term.toString value}"
 
-                            if bindingGroup.Count > 1 then
+                            if bindingGroup.Length > 1 then
                                 printfn ""  
                         
                         if cached |> Seq.tail |> Seq.isEmpty then

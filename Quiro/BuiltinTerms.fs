@@ -7,16 +7,16 @@ open Functional
 open Microsoft.FSharp.Core
 open Quiro
 open Quiro.Interpreter.Internal
-open Quiro.StoredTerms
+open Quiro.StoredRules
 
 [<AutoOpen>]
 module Helpers =
-    let pred (f: InterpreterContext -> PrologValue list -> Map<string, PrologValue> seq voption) = f
-    let emptySuccess: Map<string, PrologValue> seq voption = ValueSome [| Map.empty |]
+    let pred (f: InterpreterContext -> Term list -> Map<string * int, Term> seq voption) = f
+    let emptySuccess: (Var * Term)[] seq voption = ValueSome [| Array.empty |]
     let inline wrap test =
         if test then emptySuccess else ValueNone
     
-    let func (f: InterpreterContext -> PrologValue list -> PrologValue voption) = f
+    let func (f: InterpreterContext -> Term list -> Term voption) = f
     let mathFunc op = func(fun context args ->
         match args with
         | [ a; b ] ->
@@ -68,14 +68,17 @@ let defaultTerms() =
 
         container.Add(signature, description)
     
-    addPred ("describe", 3) (fun _ args ->
+    addPred ("describe", 3) (fun context args ->
         match args with
         | [ Atom lookupTerm; Variable signatureVar; Variable descriptionVar ] ->
             match describeTable.TryGetValue lookupTerm with
             | true, container ->
                 seq {
                     for signature, description in container do
-                        yield Map.ofArray [| (signatureVar, Text signature); (descriptionVar, Text description) |]
+                        yield [|
+                            signatureVar, (Text signature)
+                            descriptionVar, (Text description)
+                        |]
                 }
                 |> Seq.noneIfEmpty
             | false, _ -> ValueNone
@@ -100,16 +103,18 @@ let defaultTerms() =
     describe "describe" "describe" "Prints the description(s) of the term to stdout."
     describe "describe" "describe(+Term, -Signature, -Description)" "Provides the signature(s) and description(s) of the given term."
 
-    terms.userPredicates[("describe", 1)] <- ResizeArray([|
-        [ Variable "Term" ], ConjunctionGoal [|
-            SimpleGoal("describe", [ Variable "Term"; Variable "Signature"; Variable "Description" ])
-            SimpleGoal("write", [ Variable "Signature" ])
-            SimpleGoal("write", [ Text " - " ])
-            SimpleGoal("write", [ Variable "Description" ])
-            SimpleGoal("nl", [])
-        |]
-    |])
-    
+    do
+        let term, signature, description = Term.makeVar "Term", Term.makeVar "Signature", Term.makeVar "Description"
+        terms.userPredicates[("describe", 1)] <- ResizeArray([|
+            [ term ], Conjunction [|
+                Term("describe", [ term; signature; description ])
+                Term("write", [ signature ])
+                Term("write", [ Text " - " ])
+                Term("write", [ description ])
+                Atom "nl"
+            |]
+        |])
+
     describe "nl" "nl" "Prints a newline to stdout."
     addPred ("nl", 0) (fun _ _ ->
         Console.WriteLine()
@@ -117,18 +122,18 @@ let defaultTerms() =
     )
     
     describe "write" "write(?Value)" "Prints a value to stdout or a reads a character from stdin."
-    addPred ("write", 1) (fun _ args ->
+    addPred ("write", 1) (fun context args ->
         match args[0] with
         | Variable name ->
             let value = Console.ReadLine()
-            ValueSome [| Map.ofArray [| (name, Text value) |] |]
-            
+            ValueSome [| [| name, (Text value) |] |]
+
         | Text text ->
             Console.Write text
             emptySuccess
 
         | value ->
-            Console.Write(PrologValue.toString value)
+            Console.Write(Term.toString value)
             emptySuccess    
     )
 
@@ -137,9 +142,9 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> Map.ofArray [| a, Number i |] })
+                ValueSome (seq { for i in b - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> [| a, (Number i) |] })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> Map.ofArray [| b, Number i |] })
+                ValueSome (seq { for i in a + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> [| b, (Number i) |] })
             | _ -> wrap (a < b)
         | _ -> ValueNone
     )
@@ -148,9 +153,9 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b .. -BigFloat.One .. BigFloat.NegativeInfinity -> Map.ofArray [| a, Number i |] })
+                ValueSome (seq { for i in b .. -BigFloat.One .. BigFloat.NegativeInfinity -> [| a, (Number i) |] })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a .. BigFloat.One .. BigFloat.PositiveInfinity -> Map.ofArray [| b, Number i |] })
+                ValueSome (seq { for i in a .. BigFloat.One .. BigFloat.PositiveInfinity -> [| b, (Number i) |] })
             | _ -> wrap (a <= b)
         | _ -> ValueNone
     )
@@ -160,9 +165,9 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> Map.ofArray [| a, Number i |] })
+                ValueSome (seq { for i in b + BigFloat.One.. BigFloat.One .. BigFloat.PositiveInfinity -> [| a, (Number i) |] })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> Map.ofArray [| b, Number i |] })
+                ValueSome (seq { for i in a - BigFloat.One.. -BigFloat.One .. BigFloat.NegativeInfinity -> [| b, (Number i) |] })
             | _ -> wrap (a > b)
         | _ -> ValueNone
     )
@@ -171,9 +176,9 @@ let defaultTerms() =
         | [ Eval context a; Eval context b ] ->
             match a, b with
             | Variable a, Number b ->
-                ValueSome (seq { for i in b .. BigFloat.One .. BigFloat.PositiveInfinity -> Map.ofArray [| a, Number i |] })
+                ValueSome (seq { for i in b .. BigFloat.One .. BigFloat.PositiveInfinity -> [| a, (Number i) |] })
             | Number a, Variable b ->
-                ValueSome (seq { for i in a .. -BigFloat.One .. BigFloat.NegativeInfinity -> Map.ofArray [| b, Number i |] })
+                ValueSome (seq { for i in a .. -BigFloat.One .. BigFloat.NegativeInfinity -> [| b, (Number i) |] })
             | _ -> wrap (a >= b)
         | _ -> ValueNone
     )
@@ -203,11 +208,12 @@ let defaultTerms() =
     addPred ("is", 2) (fun context args ->
         match args with
         | [ left; right ] ->
-            if hasFreeVariables context.scope left then
-                assignVarFromValue context.scope InVarOnly left right
+            let evaluatedRight = evaluateExpr context right
+
+            if hasFreeVariables left then
+                unify left evaluatedRight
                 |> ValueOption.map Seq.singleton
             else
-                let evaluatedRight = evaluateExpr context right
                 wrap (left = evaluatedRight)
             
         | _ -> ValueNone
@@ -216,14 +222,8 @@ let defaultTerms() =
     describe "not" "not(:Pred)" "Negates the success of the given predicate."
     addPred ("not", 1) (fun context args ->
         match args with
-        | [ Variable pred ] ->
-            match tryProveGoal context (SimpleGoal (pred, [])) with
-            | ValueSome _ -> ValueNone
-            | ValueNone -> emptySuccess
-        | [ Term (functor, args) ] ->
-            match tryProveGoal context (SimpleGoal (functor, args)) with
-            | ValueSome _ -> ValueNone
-            | ValueNone -> emptySuccess
+        | [ Atom _ | Term _ as pred ] ->
+            tryProveGoal context pred  context.substitutions
         | _ -> ValueNone
     )
     
@@ -232,7 +232,7 @@ let defaultTerms() =
     addPred ("call", 1) (fun context args ->
         match args with
         | [ ListTerm (Atom pred :: predArgs) ] ->
-            tryProveGoal context (SimpleGoal (pred, predArgs))
+            tryProveGoal context (Term (pred, predArgs)) context.substitutions
         | _ -> ValueNone
     )
     
@@ -240,8 +240,8 @@ let defaultTerms() =
     addPred ("length", 2) (fun context args ->
         match args with
         | [ a; b ] ->
-            let freeA = hasFreeVariables context.scope a
-            let freeB = hasFreeVariables context.scope b
+            let freeA = hasFreeVariables a
+            let freeB = hasFreeVariables b
 
             match freeA, freeB with
             | true, true ->
@@ -251,10 +251,10 @@ let defaultTerms() =
                         let length = Number (BigFloat.Decimal (BigDecimal i))
                         
                         let results =
-                            assignVarFromValue context.scope InVarOnly a constructed
+                            unify a constructed
                             |> ValueOption.bind (fun q ->
-                                assignVarFromValue context.scope InVarOnly b length
-                                |> ValueOption.map (Map.merge q)
+                                unify b length
+                                |> ValueOption.map (Array.append q)
                             )
 
                         match results with
@@ -271,14 +271,14 @@ let defaultTerms() =
                         elif length > BigFloat.Decimal (BigDecimal Int32.MaxValue) then Int32.MaxValue
                         else int (string length)
                     let constructed = ListTerm (List.init size (fun _ -> Atom "nil"))
-                    assignVarFromValue context.scope InVarOnly a constructed
+                    unify a constructed
                     |> ValueOption.map Seq.singleton
                 | _ -> ValueNone
             
             | false, true ->
                 match a, b with
                 | Eval context (ListTerm values), Variable b ->
-                    ValueSome [| Map.ofArray [| b, Number (BigFloat.Decimal (BigDecimal values.Length)) |] |]
+                    ValueSome [| [| b, Number (BigFloat.Decimal (BigDecimal values.Length)) |] |]
                 | _ -> ValueNone
 
             | false, false ->
@@ -294,9 +294,9 @@ let defaultTerms() =
     addPred ("append", 3) (fun context args ->
         match args with
         | [ a; b; c ] ->
-            let freeA = hasFreeVariables context.scope a
-            let freeB = hasFreeVariables context.scope b
-            let freeC = hasFreeVariables context.scope c
+            let freeA = hasFreeVariables a
+            let freeB = hasFreeVariables b
+            let freeC = hasFreeVariables c
             
             match freeA, freeB, freeC with
             | true, true, false ->
@@ -309,10 +309,10 @@ let defaultTerms() =
                         
                         while go do
                             let vars =
-                                assignVarFromValue context.scope InVarOnly a (ListTerm prefix)
+                                unify a (ListTerm prefix)
                                 |> ValueOption.bind (fun q ->
-                                    assignVarFromValue context.scope InVarOnly b (ListTerm suffix)
-                                    |> ValueOption.map (Map.merge q)
+                                    unify b (ListTerm suffix)
+                                    |> ValueOption.map (Array.append q)
                                 )
 
                             match vars with
@@ -331,7 +331,7 @@ let defaultTerms() =
             | false, false, true ->
                  match a, b with
                  | Eval context (ListTerm va), Eval context (ListTerm vb) ->
-                     assignVarFromValue context.scope InVarOnly c (ListTerm (List.append va vb))
+                     unify c (ListTerm (List.append va vb))
                      |> ValueOption.map Seq.singleton
                  | _ -> ValueNone
             | _ -> ValueNone

@@ -7,33 +7,29 @@ type FileLocation = {
     column: int64
 }
 
-type PrologExprASTKind =
+type TermASTKind =
     | ExprAtom of atom:string
     | ExprNumber of BigFloat
     | ExprText of string
-    | ExprListTerm of elements:PrologExprAST list
-    | ExprTerm of target:string * args:PrologExprAST list
+    | ExprListTerm of elements:TermAST list
+    | ExprTerm of target:string * args:TermAST list
     | ExprVariable of name:string
-    | ExprListCons of head:PrologExprAST * tail:PrologExprAST
+    | ExprListCons of head:TermAST * tail:TermAST
+    | ExprNegation of TermAST
+    | ExprConjunction of TermAST[]
+    | ExprDisjunction of TermAST[]
     | ExprPlaceholder
 
-type PrologExprAST = {
-    exprKind: PrologExprASTKind
+type TermAST = {
+    termKind: TermASTKind
     location: FileLocation
 }
 
-type PrologGoalASTKind =
-    | GoalPlaceholder
-    | GoalSimple of functor:string * args:PrologExprAST list
-    | GoalNegated of PrologGoalAST
-    | GoalConjunction of PrologGoalAST[]
-    | GoalDisjunction of PrologGoalAST[]
-
 type DCTAstKind =
     | DCGTerm of string
-    | DCGCall of functor:string * args:PrologExprAST list
-    | DCGGoal of PrologGoalAST
-    | DCGList of PrologExprAST list
+    | DCGCall of functor:string * args:TermAST list
+    | DCGGoal of TermAST
+    | DCGList of TermAST list
     | DCGSequence of DCGAST[]
 
 type DCGAST = {
@@ -41,14 +37,9 @@ type DCGAST = {
     location: FileLocation
 }
 
-type PrologGoalAST = {
-    goalKind: PrologGoalASTKind
-    location: FileLocation
-}
-
 type DeclarationKind =
-    | PredicateDeclaration of functor:string * arguments:PrologExprAST list * goal:PrologGoalAST
-    | DCGDeclaration of functor:string * arguments:PrologExprAST list * body:DCGAST
+    | PredicateDeclaration of functor:string * arguments:TermAST list * goal:TermAST
+    | DCGDeclaration of functor:string * arguments:TermAST list * body:DCGAST
     
 type Declaration = {
     decKind: DeclarationKind

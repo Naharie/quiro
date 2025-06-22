@@ -13,26 +13,22 @@ type DebugLevel =
     | NoDebugInfo
 
 /// The instantiated form of a predicate or function.
-type InstantiatedCompound = string * PrologValue
+type InstantiatedCompound = string * Term
 
-type NativePredicate = InterpreterContext -> PrologValue list -> Map<string, PrologValue> seq voption
-type NativeFunction = InterpreterContext -> PrologValue list -> PrologValue voption
+type NativePredicate = InterpreterContext -> Term list -> (Var * Term)[] seq voption
+type NativeFunction = InterpreterContext -> Term list -> Term voption
 
 type InterpreterContext = {
     /// The level of debug information to print out.
     debugLevel: DebugLevel
 
-    terms: StoredTerms
-    scope: Scope
-
+    terms: StoredRules
+    substitutions: (Var * Term)[]
     stack: StackFrame list
 }
-with
-    member this.NestScope bindings =
-        { this with scope = this.scope.CreateChild bindings }
 
-type StoredTerms = {
-    userPredicates: Dictionary<string * int, ResizeArray<PrologValue list * Goal>>
+type StoredRules = {
+    userPredicates: Dictionary<string * int, ResizeArray<Term list * Term>>
     nativePredicates: Dictionary<string * int, ResizeArray<NativePredicate>>
     functions: Dictionary<string * int, ResizeArray<NativeFunction>>
 }
@@ -40,7 +36,7 @@ type StoredTerms = {
 // Helper modules
 
 [<CompilationRepresentation(CompilationRepresentationFlags.ModuleSuffix)>]
-module StoredTerms =
+module StoredRules =
     let emptyTerms () =
         {   
             userPredicates = Dictionary()
@@ -52,7 +48,7 @@ module StoredTerms =
     let private emptyNativePredicates = ResizeArray()
     let private emptyFunctions = ResizeArray()
     
-    let lookupPredicates (scope: StoredTerms) (key: string * int) =
+    let lookupPredicates (scope: StoredRules) (key: string * int) =
         let mutable result = Unchecked.defaultof<ResizeArray<_>>
         
         if scope.userPredicates.TryGetValue(key, &result) then
@@ -60,7 +56,7 @@ module StoredTerms =
         else
             emptyPredicates
 
-    let lookupNativePredicates (scope: StoredTerms) (key: string * int) =
+    let lookupNativePredicates (scope: StoredRules) (key: string * int) =
         let mutable result = Unchecked.defaultof<ResizeArray<_>>
         
         if scope.nativePredicates.TryGetValue(key, &result) then
@@ -68,7 +64,7 @@ module StoredTerms =
         else
             emptyNativePredicates
             
-    let lookupFunctions (scope: StoredTerms) (key: string * int) =
+    let lookupFunctions (scope: StoredRules) (key: string * int) =
         let mutable result = Unchecked.defaultof<ResizeArray<_>>
 
         if scope.functions.TryGetValue(key, &result) then

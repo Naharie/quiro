@@ -13,10 +13,9 @@
         <Compile Include="Seq.fs" />
         <Compile Include="BigFloat.fs" />
         <Compile Include="AST.fs" />
-        <Compile Include="PrologValue.fs" />
+        <Compile Include="Term.fs" />
         <Compile Include="StackFrame.fs" />
         <Compile Include="PrologException.fs" />
-        <Compile Include="Scope.fs" />
         <Compile Include="InterpreterContext.fs" />
         <Compile Include="Parser.Internal.fs" />
         <Compile Include="Parser.fs" />
