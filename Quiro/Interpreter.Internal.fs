@@ -88,6 +88,11 @@ let hasFreeVariables expr =
     | Negation term -> hasFreeVariables term
     | Conjunction terms | Disjunction terms -> terms |> Array.exists hasFreeVariables
 
+let (|TextList|) (text: string) =
+    text.ToCharArray()
+    |> Array.map (fun char -> string char |> Text)
+    |> Array.toList
+
 let rec unify (left: Term) (right: Term) =
     match left, right with
     | l, r when l = r -> ValueSome [||]
@@ -101,18 +106,30 @@ let rec unify (left: Term) (right: Term) =
         if containsVar var other then ValueNone
         else ValueSome [| (var, other) |]
     
-    | ListCons (lHead, lTail), ListCons(rHead, rTail)
-    | ListCons (lHead, lTail), ListTerm(rHead :: Wrap ListTerm rTail)
+    | Text a, Text b ->
+        if a = b then ValueSome [||] else ValueNone
+    
+    | (ListTerm lItems | Text (TextList lItems)), (ListTerm rItems | Text (TextList rItems)) ->
+        if lItems.Length <> rItems.Length then ValueNone
+        else unifyMany lItems rItems
+
+    | ListCons(head, tail), Text data | Text data, ListCons(head, tail) ->
+        if data.Length = 0 then ValueNone
+        else
+            unify head (data[0] |> string |> Text)
+            |> ValueOption.bind (fun subA ->
+                unify tail (data.Substring(1) |> Text)
+                |> ValueOption.map (Array.append subA)
+            )
+    
+    | (ListCons (lHead, lTail) | ListTerm (lHead :: Wrap ListTerm lTail) | Text (TextList (lHead :: Wrap ListTerm lTail))),
+        (ListCons(rHead, rTail) | ListTerm(rHead :: Wrap ListTerm rTail) | Text (TextList (rHead :: Wrap ListTerm rTail)))
     | ListTerm (lHead :: Wrap ListTerm lTail), ListCons (rHead, rTail) ->
         unify lHead rHead
         |> ValueOption.bind (fun subA ->
             unify lTail rTail
             |> ValueOption.map (Array.append subA)
         )
-
-    | ListTerm lItems, ListTerm rItems ->
-        if lItems.Length <> rItems.Length then ValueNone
-        else unifyMany lItems rItems
 
     | Term(lFunc, lArgs), Term(rFunc, rArgs) ->
         if lFunc <> rFunc || lArgs.Length <> rArgs.Length then ValueNone

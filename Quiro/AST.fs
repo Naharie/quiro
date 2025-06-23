@@ -1,5 +1,7 @@
 module rec Quiro.AST
 
+open Microsoft.FSharp.Core
+
 type FileLocation = {
     file: string
     index: int64
@@ -9,7 +11,7 @@ type FileLocation = {
 
 type TermASTKind =
     | ExprAtom of atom:string
-    | ExprNumber of BigFloat
+    | ExprNumber of float
     | ExprText of string
     | ExprListTerm of elements:TermAST list
     | ExprTerm of target:string * args:TermAST list

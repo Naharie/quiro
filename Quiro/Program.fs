@@ -2,13 +2,10 @@
 open System.Collections.Generic
 open System.IO
 open Quiro
-open Quiro.BuiltinTerms
 
 [<EntryPoint>]
-let main args =
-    // file/process_lines(Path, Lines), sort(List, Sorted), convert/string-list concat(Groups, Separator, Combined)
-    
-    let mutable terms = StoredTerms.defaultTerms()
+let main _ =
+    let mutable terms = BuiltinTerms.defaultTerms()
     
     printfn "End a declaration with . to store it, end a query with ? to run it."
     printfn "You can use .load <path> to load a script file."

@@ -6,7 +6,7 @@ type Term =
     // a, 'b', 'hello'
     | Atom of atom:string
     // 1, 1.5, nan, infinity
-    | Number of BigFloat
+    | Number of float
     // "Hello World"
     | Text of string
     

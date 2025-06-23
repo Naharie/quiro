@@ -1,10 +1,7 @@
 module Quiro.Parser.Internal
 
 open System
-open System.Numerics
-open ExtendedNumerics
 open FParsec
-open Quiro
 open Quiro.AST
 
 // Types
@@ -84,15 +81,17 @@ let numberExpr: _ Parser =
                    | Some fraction -> "." + fraction
                    | None -> ""
                 )
-            let baseNumber = BigDecimal.Parse numberText
-            let exponent =
-                match exponent with
-                | Some exponent -> BigInteger.Parse exponent
-                | None -> BigInteger.One
-            let number = BigDecimal.Pow(baseNumber, exponent)
-
-            ExprNumber (BigFloat.Decimal number)
+                + (match exponent with
+                   | Some exponent -> "E" + exponent
+                   | None -> ""
+                )
+                
+            match Double.TryParse numberText with
+            | true, result -> ExprNumber result
+            | false, _ -> failwith "Invalid number literal"
         )
+    <|> stringReturn "nan" (ExprNumber nan)
+    <|> stringReturn "infinity" (ExprNumber infinity)
     |> termAST
 
 let textExpr: _ Parser =
@@ -168,19 +167,20 @@ let parenExpr = skipChar '(' >>. ws >>. term .>> ws .>> (skipChar ')' <|> placeh
 let expression = OperatorPrecedenceParser<TermAST, FileLocation, unit>()
 
 let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<TermAST, FileLocation, unit>) =
+    let opPos name =
+        getPosition
+        |>> fun streamPos ->
+            {
+                file = streamPos.StreamName
+                index = streamPos.Index - int64 (String.length name)
+                line = streamPos.Line
+                column = streamPos.Column - int64 (String.length name)
+            }
+    
     let op name precedence =
-        let opPos =
-            getPosition
-            |>> fun streamPos ->
-                {
-                    file = streamPos.StreamName
-                    index = streamPos.Index - int64 (String.length name)
-                    line = streamPos.Line
-                    column = streamPos.Column - int64 (String.length name)
-                }
-
-        operatorExpression.AddOperator(InfixOperator(name, opPos, precedence, Associativity.Left, (), fun pos a b ->
-            { termKind = ExprTerm(name, [ a; b ]); location = pos }))
+        operatorExpression.AddOperator(InfixOperator(name, opPos name, precedence, Associativity.Left, (), fun pos a b ->
+            { termKind = ExprTerm(name, [ a; b ]); location = pos }
+        ))
     
     op "+" 200
     op "-" 200
@@ -191,8 +191,13 @@ let addExpressionOperators (operatorExpression: OperatorPrecedenceParser<TermAST
     op "mod" 300
     op "rem" 300
 
-    op "**" 400
-    op "^" 400
+    operatorExpression.AddOperator(PrefixOperator("-", opPos "-", 400, false, (), fun pos v ->
+        { termKind = ExprTerm("-", [ v ]); location = pos }
+    ))
+    
+    op "**" 500
+    op "^" 500
+
 
 expression.TermParser <- ws >>. choice [
     parenExpr
